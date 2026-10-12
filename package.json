@@ -1,0 +1,20 @@
+{
+  "name": "music-room-vr",
+  "version": "1.0.0",
+  "description": "A realistic practice room you play with your hands: piano, drums, guitar and harp in WebXR.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "vite": "^8.3.4"
+  }
+}

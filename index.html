@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Music Room</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%233a2114%27/%3E%3Cpath d=%27M11 8v14a3 3 0 1 1-2-2.8V8l12-3v14a3 3 0 1 1-2-2.8V9z%27 fill=%27%23f3ead8%27/%3E%3C/svg%3E" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #1a1612; color: #f3ead8; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
+    canvas { display: block; }
+    #overlay {
+      position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; pointer-events: none; text-align: center; padding: 24px; background: rgba(20, 14, 10, 0.55);
+    }
+    #overlay h1 { font-weight: 600; font-size: 30px; margin: 0; letter-spacing: 0.04em; }
+    #overlay p { margin: 0; max-width: 520px; line-height: 1.55; opacity: 0.9; font-size: 15px; }
+    #overlay.hidden { display: none; }
+    #hint { position: fixed; left: 16px; bottom: 16px; font-size: 13px; opacity: 0.6; pointer-events: none; max-width: 70vw; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <h1>Music Room</h1>
+    <p>A small practice room with a weighted-key piano, a drum kit, an acoustic guitar and a lever harp. Everything is played with your bare hands: press the keys, strike the drums, sweep across the strings. The tape deck on the side table records your session so you can hear it back. Nothing is saved.</p>
+    <p><b>Headset:</b> press Enter VR below. Pinch empty air and pull sideways to swivel your seat.<br/><b>Desktop:</b> click anywhere to start. Click keys and drums, drag across the guitar or harp strings, drag empty space to look around.</p>
+  </div>
+  <div id="hint"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
