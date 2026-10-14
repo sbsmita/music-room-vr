@@ -244,12 +244,12 @@ export class AudioEngine {
     top.frequency.value = 215;
     top.Q.value = 2;
     top.gain.value = 3.5;
-    air.connect(top).connect(this.master);
+    air.connect(top).connect(this.spatial('guitar'));
     this.body = air;
     return air;
   }
 
-  playBuffer(buf, { t, level, cutoff, send, voice, body = false }) {
+  playBuffer(buf, { t, level, cutoff, send, voice, body = false, source = null }) {
     const c = this.ctx;
     const src = c.createBufferSource();
     src.buffer = buf;
@@ -259,7 +259,7 @@ export class AudioEngine {
     f.Q.value = 0.4;
     const g = c.createGain();
     g.gain.value = level;
-    src.connect(f).connect(g).connect(body ? this.guitarBody() : this.master);
+    src.connect(f).connect(g).connect(body ? this.guitarBody() : source ? this.spatial(source) : this.master);
     if (send > 0) {
       const s = c.createGain();
       s.gain.value = send;
@@ -268,6 +268,53 @@ export class AudioEngine {
     src.start(Math.max(t, c.currentTime));
     voice.attach(src, g);
     return voice;
+  }
+
+  // ---- spatial audio: one HRTF panner per sound source, listener follows the head ----
+  spatial(name) {
+    if (!this.panners) this.panners = new Map();
+    let p = this.panners.get(name);
+    if (!p) {
+      const c = this.ctx;
+      p = c.createPanner();
+      p.panningModel = 'HRTF';
+      p.distanceModel = 'inverse';
+      p.refDistance = 0.6;
+      p.rolloffFactor = 1.1;
+      p.maxDistance = 30;
+      p.connect(this.master);
+      this.panners.set(name, p);
+    }
+    return p;
+  }
+
+  // Sources only move when a rig is dragged, so positions are set directly rather than ramped.
+  setSourcePosition(name, x, y, z) {
+    if (!this.started) return;
+    const p = this.spatial(name);
+    p.positionX.value = x;
+    p.positionY.value = y;
+    p.positionZ.value = z;
+  }
+
+  setListener(pos, fwd, up) {
+    if (!this.started) return;
+    const l = this.ctx.listener;
+    const t = this.ctx.currentTime;
+    if (l.positionX) {
+      l.positionX.setTargetAtTime(pos.x, t, 0.02);
+      l.positionY.setTargetAtTime(pos.y, t, 0.02);
+      l.positionZ.setTargetAtTime(pos.z, t, 0.02);
+      l.forwardX.setTargetAtTime(fwd.x, t, 0.02);
+      l.forwardY.setTargetAtTime(fwd.y, t, 0.02);
+      l.forwardZ.setTargetAtTime(fwd.z, t, 0.02);
+      l.upX.setTargetAtTime(up.x, t, 0.02);
+      l.upY.setTargetAtTime(up.y, t, 0.02);
+      l.upZ.setTargetAtTime(up.z, t, 0.02);
+    } else {
+      l.setPosition(pos.x, pos.y, pos.z);
+      l.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);
+    }
   }
 
   // Ambience: fireplace crackle and wind, each on its own gain so they can be switched.
@@ -284,7 +331,7 @@ export class AudioEngine {
     // Fire: low noise bed with slow breathing, plus random pops from the timer below.
     amb.fire = c.createGain();
     amb.fire.gain.value = 0;
-    amb.fire.connect(this.master);
+    amb.fire.connect(this.spatial('fire'));
     const bed = c.createBufferSource();
     bed.buffer = this.noise;
     bed.loop = true;
@@ -292,11 +339,11 @@ export class AudioEngine {
     lp.type = 'lowpass';
     lp.frequency.value = 420;
     const bg = c.createGain();
-    bg.gain.value = 0.035;
+    bg.gain.value = 0.09;
     const lfo = c.createOscillator();
     lfo.frequency.value = 0.17;
     const lfoGain = c.createGain();
-    lfoGain.gain.value = 0.012;
+    lfoGain.gain.value = 0.03;
     lfo.connect(lfoGain).connect(bg.gain);
     bed.connect(lp).connect(bg).connect(amb.fire);
     bed.start();
@@ -304,13 +351,13 @@ export class AudioEngine {
     amb.popTimer = setInterval(() => {
       if (!amb.fireOn || Math.random() > 0.65) return;
       const t = c.currentTime + Math.random() * 0.2;
-      this.noiseVoice(t, { bp: 1600 + Math.random() * 3500, q: 2.5, peak: 0.02 + Math.random() * 0.05, decay: 0.012 + Math.random() * 0.03 });
+      this.noiseVoice(t, { bp: 1600 + Math.random() * 3500, q: 2.5, peak: 0.05 + Math.random() * 0.1, decay: 0.012 + Math.random() * 0.03, dest: amb.fire });
     }, 110);
 
     // Wind: a deep rumble and a wandering whistle, both gusting slowly.
     amb.wind = c.createGain();
     amb.wind.gain.value = 0;
-    amb.wind.connect(this.master);
+    amb.wind.connect(this.spatial('wind'));
     const rumbleSrc = c.createBufferSource();
     rumbleSrc.buffer = this.noise;
     rumbleSrc.loop = true;
@@ -318,11 +365,11 @@ export class AudioEngine {
     rlp.type = 'lowpass';
     rlp.frequency.value = 260;
     const rg = c.createGain();
-    rg.gain.value = 0.05;
+    rg.gain.value = 0.1;
     const gust = c.createOscillator();
     gust.frequency.value = 0.07;
     const gustGain = c.createGain();
-    gustGain.gain.value = 0.03;
+    gustGain.gain.value = 0.06;
     gust.connect(gustGain).connect(rg.gain);
     rumbleSrc.connect(rlp).connect(rg).connect(amb.wind);
     const whistleSrc = c.createBufferSource();
@@ -338,11 +385,11 @@ export class AudioEngine {
     sweepGain.gain.value = 320;
     sweep.connect(sweepGain).connect(bp.frequency);
     const wg = c.createGain();
-    wg.gain.value = 0.05;
+    wg.gain.value = 0.1;
     const wlfo = c.createOscillator();
     wlfo.frequency.value = 0.05;
     const wlfoGain = c.createGain();
-    wlfoGain.gain.value = 0.035;
+    wlfoGain.gain.value = 0.07;
     wlfo.connect(wlfoGain).connect(wg.gain);
     whistleSrc.connect(bp).connect(wg).connect(amb.wind);
     rumbleSrc.start();
@@ -350,7 +397,54 @@ export class AudioEngine {
     gust.start();
     sweep.start();
     wlfo.start();
+
+    // Rain: a steady hiss that swells slowly, a low roof rumble, and random single drops.
+    amb.rain = c.createGain();
+    amb.rain.gain.value = 0;
+    amb.rain.connect(this.spatial('rain'));
+    const hissSrc = c.createBufferSource();
+    hissSrc.buffer = this.noise;
+    hissSrc.loop = true;
+    const hbp = c.createBiquadFilter();
+    hbp.type = 'bandpass';
+    hbp.frequency.value = 3200;
+    hbp.Q.value = 0.45;
+    const hg = c.createGain();
+    hg.gain.value = 0.12;
+    const hlfo = c.createOscillator();
+    hlfo.frequency.value = 0.09;
+    const hlfoGain = c.createGain();
+    hlfoGain.gain.value = 0.04;
+    hlfo.connect(hlfoGain).connect(hg.gain);
+    hissSrc.connect(hbp).connect(hg).connect(amb.rain);
+    const roofSrc = c.createBufferSource();
+    roofSrc.buffer = this.noise;
+    roofSrc.loop = true;
+    const rlp2 = c.createBiquadFilter();
+    rlp2.type = 'lowpass';
+    rlp2.frequency.value = 140;
+    const rg2 = c.createGain();
+    rg2.gain.value = 0.06;
+    roofSrc.connect(rlp2).connect(rg2).connect(amb.rain);
+    hissSrc.start();
+    roofSrc.start();
+    hlfo.start();
+    amb.dropTimer = setInterval(() => {
+      if (!amb.rainOn) return;
+      const n = Math.random() < 0.5 ? 1 : 2;
+      for (let i = 0; i < n; i++) {
+        const t = c.currentTime + Math.random() * 0.05;
+        this.noiseVoice(t, { bp: 3000 + Math.random() * 6000, q: 4, peak: 0.016 + Math.random() * 0.04, decay: 0.005 + Math.random() * 0.012, dest: amb.rain });
+      }
+    }, 55);
     this.amb = amb;
+  }
+
+  setRain(on) {
+    this.ensureAmbience();
+    if (!this.amb) return;
+    this.amb.rainOn = on;
+    this.amb.ramp(this.amb.rain, on ? 1 : 0);
   }
 
   setFire(on) {
@@ -380,6 +474,8 @@ export class AudioEngine {
       cutoff: clamp(f * 1.5 + 300 + Math.pow(vel, 1.6) * 11000, 500, 16000),
       send: 0.22,
       voice,
+      // Bass, middle and treble each have their own source across the keyboard's width.
+      source: midi < 52 ? 'piano-lo' : midi < 76 ? 'piano-mid' : 'piano-hi',
     };
     const b = this.getBuffer('piano', midi);
     if (b instanceof Promise) b.then((buf) => this.playBuffer(buf, { ...opts, t: this.now }));
@@ -399,6 +495,7 @@ export class AudioEngine {
       send: guitar ? 0.16 : 0.34,
       voice,
       body: guitar,
+      source: guitar ? null : 'harp',
     });
   }
 
@@ -409,7 +506,7 @@ export class AudioEngine {
     g.gain.exponentialRampToValueAtTime(0.0005, t + decay);
   }
 
-  noiseVoice(t, { hp = 0, lp = 20000, bp = 0, q = 1, peak, decay, send = 0 }) {
+  noiseVoice(t, { hp = 0, lp = 20000, bp = 0, q = 1, peak, decay, send = 0, dest = null }) {
     const c = this.ctx;
     const src = c.createBufferSource();
     src.buffer = this.noise;
@@ -439,7 +536,7 @@ export class AudioEngine {
     }
     const g = c.createGain();
     this.env(g, peak, decay, t);
-    node.connect(g).connect(this.master);
+    node.connect(g).connect(dest || this.master);
     if (send > 0) {
       const s = c.createGain();
       s.gain.value = send;
@@ -449,7 +546,7 @@ export class AudioEngine {
     src.stop(t + decay + 0.05);
   }
 
-  toneVoice(t, { type = 'sine', f0, f1 = f0, slide = 0.05, peak, decay, send = 0, lp = 20000 }) {
+  toneVoice(t, { type = 'sine', f0, f1 = f0, slide = 0.05, peak, decay, send = 0, lp = 20000, dest = null }) {
     const c = this.ctx;
     const o = c.createOscillator();
     o.type = type;
@@ -465,7 +562,7 @@ export class AudioEngine {
       o.connect(f);
       node = f;
     }
-    node.connect(g).connect(this.master);
+    node.connect(g).connect(dest || this.master);
     if (send > 0) {
       const s = c.createGain();
       s.gain.value = send;
@@ -476,7 +573,7 @@ export class AudioEngine {
   }
 
   // Six inharmonic square waves through band/high-pass filters: the classic cymbal/hat recipe.
-  metalVoice(t, { ratio = 1, bp = 9500, hp = 6500, peak, decay, send = 0 }) {
+  metalVoice(t, { ratio = 1, bp = 9500, hp = 6500, peak, decay, send = 0, dest = null }) {
     const c = this.ctx;
     const bpf = c.createBiquadFilter();
     bpf.type = 'bandpass';
@@ -487,7 +584,7 @@ export class AudioEngine {
     hpf.frequency.value = hp;
     const g = c.createGain();
     this.env(g, peak, decay, t);
-    bpf.connect(hpf).connect(g).connect(this.master);
+    bpf.connect(hpf).connect(g).connect(dest || this.master);
     if (send > 0) {
       const s = c.createGain();
       s.gain.value = send;
@@ -507,6 +604,22 @@ export class AudioEngine {
     if (!this.started) return;
     vel = clamp(vel, 0.05, 1);
     const v2 = vel * vel;
+    // Route every voice of this hit to the drum's own spatial source.
+    const dest = this.spatial('drum:' + kind);
+    const tv = this.toneVoice, nv = this.noiseVoice, mv = this.metalVoice;
+    this.toneVoice = (tt, o) => tv.call(this, tt, { ...o, dest });
+    this.noiseVoice = (tt, o) => nv.call(this, tt, { ...o, dest });
+    this.metalVoice = (tt, o) => mv.call(this, tt, { ...o, dest });
+    try {
+      this.drumVoices(kind, vel, v2, t);
+    } finally {
+      this.toneVoice = tv;
+      this.noiseVoice = nv;
+      this.metalVoice = mv;
+    }
+  }
+
+  drumVoices(kind, vel, v2, t) {
     switch (kind) {
       case 'kick':
         this.toneVoice(t, { f0: 165, f1: 46, slide: 0.09, peak: 1.0 * vel, decay: 0.42 + 0.1 * vel, lp: 2500 });
@@ -518,12 +631,12 @@ export class AudioEngine {
         this.noiseVoice(t, { hp: 1400, lp: 9000, peak: 0.66 * Math.pow(vel, 1.3), decay: 0.2 + 0.08 * vel, send: 0.3 });
         break;
       case 'hat':
-        this.metalVoice(t, { peak: 0.62 * vel, decay: 0.08 + 0.03 * vel });
-        this.noiseVoice(t, { hp: 9000, peak: 0.4 * vel, decay: 0.07 });
+        this.metalVoice(t, { bp: 8500, hp: 5000, peak: 1.3 * vel, decay: 0.08 + 0.03 * vel });
+        this.noiseVoice(t, { hp: 7000, peak: 0.75 * vel, decay: 0.07 });
         break;
       case 'hatOpen':
-        this.metalVoice(t, { peak: 0.52 * vel, decay: 0.42, send: 0.1 });
-        this.noiseVoice(t, { hp: 8000, peak: 0.32 * vel, decay: 0.35 });
+        this.metalVoice(t, { bp: 8500, hp: 5000, peak: 1.05 * vel, decay: 0.42, send: 0.1 });
+        this.noiseVoice(t, { hp: 7000, peak: 0.6 * vel, decay: 0.35 });
         break;
       case 'tom1':
         this.toneVoice(t, { f0: 210, f1: 140, slide: 0.12, peak: 0.9 * vel, decay: 0.62, send: 0.15 });
@@ -538,13 +651,13 @@ export class AudioEngine {
         this.noiseVoice(t, { bp: 1800, q: 0.6, peak: 0.24 * vel, decay: 0.03 });
         break;
       case 'crash':
-        this.noiseVoice(t, { bp: 5500, q: 0.4, hp: 2800, peak: 0.55 * vel, decay: 1.6 + 0.6 * vel, send: 0.25 });
-        this.metalVoice(t, { ratio: 1.7, bp: 6000, hp: 3000, peak: 0.22 * vel, decay: 1.2, send: 0.2 });
+        this.noiseVoice(t, { bp: 5500, q: 0.4, hp: 2800, peak: 0.95 * vel, decay: 1.6 + 0.6 * vel, send: 0.25 });
+        this.metalVoice(t, { ratio: 1.7, bp: 6000, hp: 3000, peak: 0.4 * vel, decay: 1.2, send: 0.2 });
         break;
       case 'ride':
-        this.metalVoice(t, { ratio: 1.3, bp: 7000, hp: 4000, peak: 0.42 * vel, decay: 1.1, send: 0.15 });
-        this.toneVoice(t, { f0: 2900, peak: 0.26 * vel, decay: 0.6 });
-        this.noiseVoice(t, { hp: 6000, peak: 0.17 * vel, decay: 0.6 });
+        this.metalVoice(t, { ratio: 1.3, bp: 7000, hp: 4000, peak: 0.8 * vel, decay: 1.1, send: 0.15 });
+        this.toneVoice(t, { f0: 2900, peak: 0.45 * vel, decay: 0.6 });
+        this.noiseVoice(t, { hp: 6000, peak: 0.3 * vel, decay: 0.6 });
         break;
     }
   }

@@ -6,6 +6,7 @@ import { labelTexture } from '../textures.js';
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
 const _prev = new THREE.Vector3();
+const _q = new THREE.Quaternion();
 
 export const CHORDS = [
   { name: 'G', notes: [43, 47, 50, 55, 59, 67] },
@@ -198,6 +199,31 @@ export class Guitar extends THREE.Group {
     }
   }
 
+  // Report a capsule along the string a fingertip is about to cross.
+  hover(pointers, glow) {
+    for (const p of pointers) {
+      if (!p.active) continue;
+      _tip.copy(p.tip);
+      this.worldToLocal(_tip);
+      if (_tip.x < this.strumX[0] || _tip.x > this.strumX[1]) continue;
+      const dz = _tip.z - this.stringZ;
+      if (dz < -0.01 || dz > 0.06) continue;
+      let best = null, bd = 0.012;
+      for (const s of this.strings) {
+        const d = Math.abs(this.stringY(s, _tip.x) - _tip.y);
+        if (d < bd) {
+          bd = d;
+          best = s;
+        }
+      }
+      if (!best) continue;
+      const pos = new THREE.Vector3(_tip.x, this.stringY(best, _tip.x), this.stringZ);
+      this.localToWorld(pos);
+      this.getWorldQuaternion(_q);
+      glow.add({ pos, length: 0.1, width: 0.012, axis: new THREE.Vector3(1, 0, 0).applyQuaternion(_q), normal: new THREE.Vector3(0, 0, 1).applyQuaternion(_q), strength: 1 - Math.max(0, dz) / 0.06 });
+    }
+  }
+
   desktopDown(hit, p) {
     _tip.copy(hit.point);
     this.worldToLocal(_tip);
@@ -278,5 +304,20 @@ export class ChordBoard extends THREE.Group {
   desktopDown(hit) {
     const b = hit.object.userData.button;
     if (b) this.guitar.setChord(b.chord);
+  }
+
+  hover(pointers, glow) {
+    for (const b of this.buttons) {
+      for (const p of pointers) {
+        if (!p.active) continue;
+        _tip.copy(p.tip);
+        this.worldToLocal(_tip);
+        const h = _tip.y - 0.026;
+        if (h < -0.01 || h > 0.07 || Math.hypot(_tip.x - b.x, _tip.z) > 0.03) continue;
+        const pos = new THREE.Vector3(b.x, 0.028, 0);
+        this.localToWorld(pos);
+        glow.add({ pos, length: 0.05, width: 0.05, axis: null, normal: new THREE.Vector3(0, 1, 0).applyQuaternion(this.getWorldQuaternion(_q)), strength: 1 - Math.max(0, h) / 0.07 });
+      }
+    }
   }
 }

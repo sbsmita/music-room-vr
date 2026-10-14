@@ -13,6 +13,7 @@ import { Harp } from './instruments/harp.js';
 import { Recorder } from './recorder.js';
 import { TapeDeck } from './tapedeck.js';
 import { AmbiencePanel } from './switches.js';
+import { HoverGlow } from './hover.js';
 
 const audio = new AudioEngine();
 
@@ -61,17 +62,21 @@ drums.position.set(0.35, 0, 0.05);
 drums.rotation.y = -Math.PI / 2;
 scene.add(drums);
 
+// Guitar, its stand and the chord board travel together as one rig so the player can pull them closer.
+const guitarRig = new THREE.Group();
+guitarRig.position.set(-0.8, 0, -0.35);
+scene.add(guitarRig);
 const guitar = new Guitar(audio, mats);
-guitar.position.set(-0.8, 0.95, -0.35);
+guitar.position.set(0, 0.95, 0);
 orient(guitar, new THREE.Vector3(-0.82, 0.57, 0), new THREE.Vector3(0.8, 0.05, 0.65));
-scene.add(guitar);
-addGuitarStand(guitar.position);
+guitarRig.add(guitar);
+addGuitarStand(guitarRig, new THREE.Vector3(0, 0.95, 0));
 
 const board = new ChordBoard(guitar, mats);
-board.position.set(-0.72, 0.7, -0.08);
+board.position.set(0.08, 0.7, 0.27);
 board.rotation.y = 0.4;
-scene.add(board);
-addPole(board.position, 0.006);
+guitarRig.add(board);
+addPole(guitarRig, board.position, 0.006);
 
 const harp = new Harp(audio, mats);
 harp.position.set(-0.62, 0, 0.6);
@@ -93,34 +98,61 @@ recorder.targets = {
     piano.playbackReleaseAll();
   },
 };
-// Side table to the player's left holds the tape deck and the fire/wind switches.
+// Side table to the player's left holds the tape deck and the fire/wind switches, as one movable rig.
 const deckPos = new THREE.Vector3(-0.52, 0.6, 0.02);
 const tableYaw = Math.atan2(0 - deckPos.x, 0.36 - deckPos.z);
-const onTable = (dx, dz) => new THREE.Vector3(dx, 0, dz).applyAxisAngle(new THREE.Vector3(0, 1, 0), tableYaw).add(deckPos);
+const tableRig = new THREE.Group();
+tableRig.position.set(deckPos.x, 0, deckPos.z);
+tableRig.rotation.y = tableYaw;
+scene.add(tableRig);
 const deck = new TapeDeck(recorder, mats);
-deck.position.copy(onTable(0.07, 0));
-deck.rotation.y = tableYaw;
-scene.add(deck);
-addSideTable(deckPos);
+deck.position.set(0.07, deckPos.y, 0);
+tableRig.add(deck);
+addSideTable(tableRig, deckPos.y);
 
 const panel = new AmbiencePanel(audio, mats);
-panel.position.copy(onTable(-0.16, 0.02));
-panel.rotation.y = tableYaw + 0.12;
-scene.add(panel);
-decor.shadowBlob(scene, deckPos.x, deckPos.z, 0.55, 0.5, 0.4);
-decor.shadowBlob(scene, drums.position.x + 0.5, drums.position.z + 0.1, 1.9, 1.6, 0.45);
-decor.shadowBlob(scene, harp.position.x - 0.2, harp.position.z - 0.25, 1.1, 0.7, 0.45, 0, harp.rotation.y);
-decor.shadowBlob(scene, guitar.position.x + 0.08, guitar.position.z - 0.15, 0.6, 0.6, 0.35);
+panel.position.set(-0.19, deckPos.y, 0.02);
+panel.rotation.y = 0.12;
+panel.onToggle = (id, on) => {
+  if (id === 'rain') decor.setRain(on);
+};
+tableRig.add(panel);
+// Contact shadows live inside the rigs so they travel with them.
+decor.shadowBlob(tableRig, 0, 0, 0.55, 0.5, 0.4);
+{
+  const v = new THREE.Vector3(drums.position.x + 0.5, 0, drums.position.z + 0.1);
+  drums.worldToLocal(v);
+  decor.shadowBlob(drums, v.x, v.z, 1.9, 1.6, 0.45);
+  const h = new THREE.Vector3(harp.position.x - 0.2, 0, harp.position.z - 0.25);
+  harp.worldToLocal(h);
+  decor.shadowBlob(harp, h.x, h.z, 1.1, 0.7, 0.45);
+  decor.shadowBlob(guitarRig, 0.08, -0.15, 0.6, 0.6, 0.35);
+}
 
 // Bake every candle in the scene into shared meshes now that all parents are placed.
 decor.finalize(scene);
 
 const instruments = [piano, drums, guitar, board, harp, deck, panel];
+// Movable rigs: pinch near one and drag to pull it closer. Each knows which instruments ride on it.
+const rigs = [
+  { group: drums, instruments: [drums], name: 'drums' },
+  { group: harp, instruments: [harp], name: 'harp' },
+  { group: guitarRig, instruments: [guitar, board], name: 'guitar' },
+  { group: tableRig, instruments: [deck, panel], name: 'table' },
+];
+const rigOf = new Map();
+for (const r of rigs) for (const inst of r.instruments) rigOf.set(inst, r);
 scene.updateMatrixWorld(true);
-const zones = instruments.map((inst) => new THREE.Box3().setFromObject(inst).expandByScalar(0.12));
+const pianoZone = new THREE.Box3().setFromObject(piano).expandByScalar(0.12);
+for (const r of rigs) r.zone = new THREE.Box3().setFromObject(r.group).expandByScalar(0.12);
+const hoverGlow = new HoverGlow(scene, 16);
+const grabRing = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 48), new THREE.MeshBasicMaterial({ color: 0xffc46a, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+grabRing.rotation.x = -Math.PI / 2;
+grabRing.visible = false;
+scene.add(grabRing);
 
 const input = new InputManager(renderer, rig);
-window.musicRoom = { THREE, audio, piano, drums, guitar, board, harp, deck, panel, recorder, camera, rig, renderer, scene, controls: look, decor };
+window.musicRoom = { THREE, audio, piano, drums, guitar, board, harp, deck, panel, recorder, camera, rig, renderer, scene, controls: look, decor, input, rigs, hoverGlow };
 
 // ---- helpers for placement ----
 function orient(obj, xDir, zDir) {
@@ -129,44 +161,39 @@ function orient(obj, xDir, zDir) {
   const y = new THREE.Vector3().crossVectors(z, x);
   obj.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
 }
-function addPole(top, r) {
+function addPole(parent, top, r) {
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(r, r, top.y, 10), mats.chrome);
   pole.position.set(top.x, top.y / 2, top.z);
-  scene.add(pole);
+  parent.add(pole);
   const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.13, 0.02, 24), mats.rubber);
   foot.position.set(top.x, 0.01, top.z);
-  scene.add(foot);
+  parent.add(foot);
 }
-function addSideTable(top) {
-  const t = new THREE.Group();
-
-  t.position.set(top.x, 0, top.z);
-  t.rotation.y = tableYaw;
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.025, 0.32), mats.walnutGloss);
-  slab.position.y = top.y - 0.0125;
+function addSideTable(parent, topY) {
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.025, 0.32), mats.walnutGloss);
+  slab.position.y = topY - 0.0125;
   slab.castShadow = slab.receiveShadow = true;
-  t.add(slab);
+  parent.add(slab);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.025, top.y - 0.025, 0.025), mats.walnutGloss);
-    leg.position.set(sx * 0.225, (top.y - 0.025) / 2, sz * 0.135);
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.025, topY - 0.025, 0.025), mats.walnutGloss);
+    leg.position.set(sx * 0.265, (topY - 0.025) / 2, sz * 0.135);
     leg.castShadow = true;
-    t.add(leg);
+    parent.add(leg);
   }
-  scene.add(t);
 }
-function addGuitarStand(pos) {
+function addGuitarStand(parent, pos) {
   // Pole behind the guitar, a short arm reaching its back, and a padded cradle under the lower bout.
   const base = new THREE.Vector3(pos.x + 0.12, 0, pos.z - 0.22);
-  addPole(new THREE.Vector3(base.x, pos.y - 0.05, base.z), 0.012);
+  addPole(parent, new THREE.Vector3(base.x, pos.y - 0.05, base.z), 0.012);
   const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.3, 8), mats.chrome);
   arm.position.set(pos.x + 0.06, pos.y - 0.06, pos.z - 0.11);
   arm.lookAt(base.x, pos.y - 0.05, base.z);
   arm.rotateX(Math.PI / 2);
-  scene.add(arm);
+  parent.add(arm);
   const cradle = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.014, 10, 24, Math.PI), mats.rubber);
   cradle.position.set(pos.x + 0.1, pos.y - 0.17, pos.z + 0.02);
   cradle.rotation.set(0, 0.9, Math.PI);
-  scene.add(cradle);
+  parent.add(cradle);
 }
 
 // ---- overlay / audio start ----
@@ -178,11 +205,14 @@ vrButton.addEventListener('click', startAudio);
 
 function startAudio() {
   if (audio.started) return;
-  audio.start().then(() => panel.sync());
+  audio.start().then(() => {
+    panel.sync();
+    syncAudioPositions();
+  });
   overlay.classList.add('hidden');
   hint.textContent = renderer.xr.isPresenting
     ? 'Pinch empty air and pull sideways to swivel your seat.'
-    : 'Drag to look around, scroll to zoom. Click or drag across the keys; A S D F row plays piano, Z/X change octave, hold Space or click the right pedal for sustain. Click drums; drag across guitar or harp strings. Tape deck and fire/wind switches are on the side table.';
+    : 'Drag to look around, scroll to zoom. Click or drag across the keys; A S D F row plays piano, Z/X change octave, Space or the pedal for sustain. Click drums; drag across guitar or harp strings. Shift+drag an instrument to move it closer. Fire, wind and rain switches sit on the side table.';
 }
 renderer.xr.addEventListener('sessionstart', () => {
   startAudio();
@@ -201,10 +231,29 @@ function setRay(e) {
   raycaster.setFromCamera(ndc, camera);
 }
 
+const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const dragPoint = new THREE.Vector3();
 renderer.domElement.addEventListener('pointerdown', (e) => {
   startAudio();
   if (renderer.xr.isPresenting) return;
   setRay(e);
+  if (e.shiftKey) {
+    // Shift+drag: pick a movable rig and slide it across the floor.
+    let pick = null, pd = Infinity;
+    for (const r of rigs) {
+      const meshes = r.instruments.flatMap((i) => i.hitMeshes);
+      const hits = raycaster.intersectObjects(meshes, false);
+      if (hits.length && hits[0].distance < pd) {
+        pd = hits[0].distance;
+        pick = { r, y: hits[0].point.y };
+      }
+    }
+    if (pick) {
+      dragPlane.constant = -pick.y;
+      if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) startGrab(pick.r, dragPoint, 'mouse');
+    }
+    return;
+  }
   let best = null;
   for (const inst of instruments) {
     const hits = raycaster.intersectObjects(inst.hitMeshes, false);
@@ -224,6 +273,11 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 });
 window.addEventListener('pointermove', (e) => {
   look.move(e);
+  if (grab.rig && grab.hand === 'mouse') {
+    setRay(e);
+    if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) moveGrab(dragPoint);
+    return;
+  }
   if (!activeInst) return;
   setRay(e);
   if (activeInst.desktopMove) {
@@ -272,6 +326,7 @@ window.addEventListener('keyup', (e) => {
 });
 window.addEventListener('pointerup', () => {
   look.end();
+  if (grab.rig && grab.hand === 'mouse') endGrab();
   if (activeInst && activeInst.desktopUp) activeInst.desktopUp(mouseP);
   activeInst = null;
   mouseP.down = false;
@@ -291,8 +346,86 @@ function headLocalX(worldPoint) {
   return _v.x;
 }
 function nearInstrument(point) {
-  for (const z of zones) if (z.containsPoint(point)) return true;
+  if (pianoZone.containsPoint(point)) return true;
+  for (const r of rigs) if (r.zone.containsPoint(point)) return true;
   return false;
+}
+function rigNear(point) {
+  for (const r of rigs) if (r.zone.containsPoint(point)) return r;
+  return null;
+}
+
+// ---- grab to move: pinch near a rig and drag it across the floor ----
+const grab = { rig: null, hand: null, offset: new THREE.Vector3() };
+const ROOM = { xMin: -2.8, xMax: 2.8, zMin: -0.8, zMax: 3.6 };
+function startGrab(rig, point, hand) {
+  grab.rig = rig;
+  grab.hand = hand;
+  grab.offset.set(rig.group.position.x - point.x, 0, rig.group.position.z - point.z);
+  rig.grabbed = true;
+  grabRing.visible = true;
+}
+function moveGrab(point) {
+  const g = grab.rig.group;
+  g.position.x = Math.min(ROOM.xMax, Math.max(ROOM.xMin, point.x + grab.offset.x));
+  g.position.z = Math.min(ROOM.zMax, Math.max(ROOM.zMin, point.z + grab.offset.z));
+  grabRing.position.set(g.position.x, 0.006, g.position.z);
+}
+function endGrab() {
+  if (!grab.rig) return;
+  grab.rig.group.updateMatrixWorld(true);
+  grab.rig.zone.setFromObject(grab.rig.group).expandByScalar(0.12);
+  syncAudioPositions();
+  grab.rig.grabbed = false;
+  grab.rig = null;
+  grab.hand = null;
+  grabRing.visible = false;
+}
+// ---- spatial audio: place every sound source in the room ----
+const _sp = new THREE.Vector3();
+function syncAudioPositions() {
+  if (!audio.started) return;
+  const put = (name, v) => audio.setSourcePosition(name, v.x, v.y, v.z);
+  piano.localToWorld(_sp.set(-0.42, 0.05, -0.05)); put('piano-lo', _sp);
+  piano.localToWorld(_sp.set(0, 0.05, -0.05)); put('piano-mid', _sp);
+  piano.localToWorld(_sp.set(0.42, 0.05, -0.05)); put('piano-hi', _sp);
+  harp.localToWorld(_sp.set(-0.33, 0.8, 0)); put('harp', _sp);
+  guitar.localToWorld(_sp.set(0, 0, 0.06)); put('guitar', _sp);
+  for (const piece of drums.pieces) {
+    piece.group.getWorldPosition(_sp);
+    put('drum:' + piece.kind, _sp);
+  }
+  put('fire', _sp.set(0.3, 0.5, 3.85));
+  put('rain', _sp.set(3.1, 1.55, 1.18));
+  put('wind', _sp.set(3.1, 1.9, 1.18));
+}
+const _lpos = new THREE.Vector3();
+const _lfwd = new THREE.Vector3();
+const _lup = new THREE.Vector3();
+function updateListener() {
+  if (!audio.started) return;
+  camera.getWorldPosition(_lpos);
+  camera.getWorldDirection(_lfwd);
+  _lup.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(_lq));
+  audio.setListener(_lpos, _lfwd, _lup);
+}
+const _lq = new THREE.Quaternion();
+
+window.musicRoom.grab = { startGrab, moveGrab, endGrab, state: grab };
+window.musicRoom.syncAudioPositions = syncAudioPositions;
+function updateGrab() {
+  if (!renderer.xr.isPresenting) return;
+  for (const h of input.hands) {
+    if (!h.connected) continue;
+    const p = h.pointers[0];
+    if (!grab.rig && h.pinchStart && p.active) {
+      const rig = rigNear(p.tip);
+      if (rig) startGrab(rig, p.tip, h);
+    }
+    if (grab.hand !== h) continue;
+    if (h.pinchEnd || !p.active) endGrab();
+    else moveGrab(p.tip);
+  }
 }
 function snapTurn(rad) {
   camera.getWorldPosition(_head);
@@ -306,7 +439,7 @@ function updateSwivel() {
   for (const h of input.hands) {
     if (!h.connected) continue;
     const p = h.pointers[0];
-    if (!swivel.hand && h.pinchStart && p.active && !nearInstrument(p.tip)) {
+    if (!swivel.hand && !grab.rig && h.pinchStart && p.active && !nearInstrument(p.tip)) {
       swivel.hand = h;
       swivel.startX = headLocalX(p.tip);
     }
@@ -334,7 +467,15 @@ renderer.setAnimationLoop(() => {
   timer.update();
   const dt = Math.min(timer.getDelta(), 0.05);
   input.update(dt);
-  for (const inst of instruments) inst.update(input.pointers, dt);
+  for (const inst of instruments) {
+    const rig = rigOf.get(inst);
+    if (rig && rig.grabbed) continue;
+    inst.update(input.pointers, dt);
+    if (inst.hover) inst.hover(input.pointers, hoverGlow);
+  }
+  hoverGlow.update(dt);
+  updateGrab();
+  updateListener();
   recorder.update();
   decor.update(dt);
   updateSwivel();

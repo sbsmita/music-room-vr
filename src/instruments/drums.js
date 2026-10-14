@@ -5,6 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
 const _prev = new THREE.Vector3();
+const _q = new THREE.Quaternion();
 
 // Five-piece kit with hi-hat, crash and ride. Each piece's group has its strike surface on the
 // local y=0 plane, so a fingertip crossing that plane downward is a hit.
@@ -196,6 +197,26 @@ export class Drums extends THREE.Group {
   desktopDown(hit) {
     const piece = hit.object.userData.piece;
     if (piece) this.hit(piece, 0.75);
+  }
+
+  // Report a disc on the head or cymbal a fingertip is hovering above.
+  hover(pointers, glow) {
+    const HOVER = 0.1;
+    for (const piece of this.pieces) {
+      for (const p of pointers) {
+        if (!p.active) continue;
+        _tip.copy(p.tip);
+        piece.group.worldToLocal(_tip);
+        if (_tip.y < -0.005 || _tip.y > HOVER) continue;
+        const rr = Math.hypot(_tip.x, _tip.z);
+        if (rr > piece.r + 0.02) continue;
+        const k = rr > piece.r - 0.03 ? (piece.r - 0.03) / rr : 1;
+        const pos = new THREE.Vector3(_tip.x * k, 0.002, _tip.z * k);
+        piece.group.localToWorld(pos);
+        const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(piece.group.getWorldQuaternion(_q));
+        glow.add({ pos, length: 0.09, width: 0.09, axis: null, normal, strength: 1 - _tip.y / HOVER });
+      }
+    }
   }
 
   playbackHit(kind, vel) {

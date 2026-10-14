@@ -682,10 +682,24 @@ export class Decor {
     return m;
   }
 
+  // RAIN switch: fade the streaks in or out and dim the sky a little while it rains.
+  setRain(on) {
+    if (this.rain) this.rain.target = on ? 1 : 0;
+  }
+
   update(dt) {
     this.time += dt;
     const t = this.time;
     fireUniforms.uTime.value = t;
+    if (this.rain) {
+      const r = this.rain;
+      r.level += (r.target - r.level) * Math.min(1, dt * 1.2);
+      if (Math.abs(r.level - r.target) < 0.003) r.level = r.target;
+      r.mat.uniforms.uTime.value = t;
+      r.mat.uniforms.uIntensity.value = r.level;
+      const k = 1 - 0.35 * r.level;
+      r.sky.color.setRGB(k, k, k + 0.02 * r.level);
+    }
     for (const p of this.plants) {
       p.group.rotation.z = Math.sin(t * 0.7 + p.phase) * p.amp;
       p.group.rotation.x = Math.sin(t * 0.5 + p.phase * 1.3) * p.amp * 0.7;

@@ -6,6 +6,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
 const _prev = new THREE.Vector3();
 const _dummy = new THREE.Object3D();
+const _q = new THREE.Quaternion();
 
 // 88-key upright. Keys hinge at the rear like real weighted keys: they travel ~10 mm at the front,
 // the sound fires a few mm into the travel, and loudness and brightness follow strike speed.
@@ -246,6 +247,27 @@ export class Piano extends THREE.Group {
     }
     if (wDirty) this.whiteMesh.instanceMatrix.needsUpdate = true;
     if (bDirty) this.blackMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // Report the key each fingertip is hovering just above.
+  hover(pointers, glow) {
+    const HOVER = 0.05;
+    for (const p of pointers) {
+      if (!p.active) continue;
+      _tip.copy(p.tip);
+      this.worldToLocal(_tip);
+      if (_tip.x < this.x0 || _tip.x > -this.x0 || _tip.z < -this.L || _tip.z > 0.01) continue;
+      const key = this.keyAt(_tip.x, _tip.z);
+      if (!key) continue;
+      const top = key.black ? this.BTOP : 0;
+      const h = _tip.y - top;
+      if (h < -0.01 || h > HOVER) continue;
+      const pos = new THREE.Vector3(key.x, top + 0.001, Math.max(-this.L + 0.03, Math.min(-0.012, _tip.z)));
+      this.localToWorld(pos);
+      const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(this.getWorldQuaternion(_q));
+      const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(_q);
+      glow.add({ pos, length: 0.07, width: key.black ? 0.016 : 0.024, axis, normal, strength: 1 - Math.max(0, h) / HOVER });
+    }
   }
 
   keyFromHit(hit) {

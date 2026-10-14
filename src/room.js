@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { box } from './materials.js';
 import { Decor } from './decor.js';
+import { rainMaterial } from './rain.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // The calm evening room: warm plaster walls, oak floor, a large maroon carpet, a brick fireplace
@@ -63,6 +64,12 @@ export function buildRoom(mats) {
   const glass = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), mats.windowGlass);
   glass.position.z = 0.0;
   win.add(glass);
+  // Rain streaks on the inside of the glass, faded in by the RAIN switch.
+  const rainMat = rainMaterial();
+  const rainPane = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), rainMat);
+  rainPane.position.z = 0.006;
+  rainPane.renderOrder = 3;
+  win.add(rainPane);
   const ivy = decor.plant({ trailing: true, height: 0.5, stems: 9, spread: 0.16, leafScale: [0.05, 0.09], pot: 0.06, dark: true, leavesPerStem: 4 });
   ivy.position.set(0.65, -winH / 2 - 0.07, 0.12);
   win.add(ivy);
@@ -74,6 +81,7 @@ export function buildRoom(mats) {
   sky.position.set(wx + 14, 4.5, winZ + 3);
   sky.rotation.y = -Math.PI / 2;
   g.add(sky);
+  decor.rain = { mat: rainMat, sky: sky.material, level: 0, target: 0 };
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), mats.nightGround);
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(wx + 20, -0.05, winZ);

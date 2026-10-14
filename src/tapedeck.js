@@ -4,6 +4,7 @@ import { box } from './materials.js';
 import { labelTexture } from './textures.js';
 
 const _tip = new THREE.Vector3();
+const _q = new THREE.Quaternion();
 
 // A reel-to-reel deck with REC, PLAY and STOP buttons. Reels turn while recording or playing,
 // and the lamp glows red while recording, green while playing.
@@ -114,5 +115,20 @@ export class TapeDeck extends THREE.Group {
   desktopDown(hit) {
     const b = hit.object.userData.button;
     if (b) this.press(b.id);
+  }
+
+  hover(pointers, glow) {
+    for (const b of this.buttons) {
+      for (const p of pointers) {
+        if (!p.active) continue;
+        _tip.copy(p.tip);
+        this.worldToLocal(_tip);
+        const h = _tip.y - 0.088;
+        if (h < -0.01 || h > 0.06 || Math.hypot(_tip.x - b.x, _tip.z - b.z) > 0.025) continue;
+        const pos = new THREE.Vector3(b.x, 0.09, b.z);
+        this.localToWorld(pos);
+        glow.add({ pos, length: 0.045, width: 0.045, axis: null, normal: new THREE.Vector3(0, 1, 0).applyQuaternion(this.getWorldQuaternion(_q)), strength: 1 - Math.max(0, h) / 0.06 });
+      }
+    }
   }
 }

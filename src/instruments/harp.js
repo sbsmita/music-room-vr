@@ -6,6 +6,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
 const _prev = new THREE.Vector3();
 const _d = new THREE.Vector2();
+const _q = new THREE.Quaternion();
 const SCALE = [0, 2, 4, 5, 7, 9, 11];
 
 // 22-string lever harp in C major, C3 to C6. Strings lie in the local z=0 plane.
@@ -154,6 +155,33 @@ export class Harp extends THREE.Group {
       s.flash = Math.max(0, s.flash - dt * 3);
       const w = 1 + s.flash * 3;
       s.mesh.scale.set(w, 1, w);
+    }
+  }
+
+  // Report a capsule along the nearest string when a fingertip is close to the string plane.
+  hover(pointers, glow) {
+    for (const p of pointers) {
+      if (!p.active) continue;
+      _tip.copy(p.tip);
+      this.worldToLocal(_tip);
+      if (Math.abs(_tip.z) > 0.07 || _tip.y < 0.1 || _tip.y > 1.5 || _tip.x < -0.75 || _tip.x > 0.12) continue;
+      let best = null, bd = 0.02, bu = 0;
+      for (const s of this.strings) {
+        const r = this.side(s, _tip.x, _tip.y);
+        if (r.u < 0.02 || r.u > 0.98) continue;
+        const d = Math.abs(r.dist);
+        if (d < bd) {
+          bd = d;
+          best = s;
+          bu = r.u;
+        }
+      }
+      if (!best) continue;
+      const pos = new THREE.Vector3().lerpVectors(best.a, best.b, bu);
+      this.localToWorld(pos);
+      this.getWorldQuaternion(_q);
+      const axis = new THREE.Vector3().subVectors(best.b, best.a).normalize().applyQuaternion(_q);
+      glow.add({ pos, length: 0.14, width: 0.014, axis, normal: new THREE.Vector3(0, 0, 1).applyQuaternion(_q), strength: 1 - Math.max(Math.abs(_tip.z) / 0.07, bd / 0.02) });
     }
   }
 
