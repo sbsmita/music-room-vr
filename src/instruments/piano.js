@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { box } from '../materials.js';
+import { box, rbox } from '../materials.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
@@ -46,9 +47,9 @@ export class Piano extends THREE.Group {
     this.byMidi = new Map(this.keys.map((k) => [k.midi, k]));
     this.recorder = null;
 
-    const whiteGeo = new THREE.BoxGeometry(W - 0.0012, this.H, this.L);
+    const whiteGeo = new RoundedBoxGeometry(W - 0.0014, this.H, this.L, 2, 0.0022);
     whiteGeo.translate(0, -this.H / 2, this.L / 2);
-    const blackGeo = new THREE.BoxGeometry(this.BW, 0.016, this.BL);
+    const blackGeo = new RoundedBoxGeometry(this.BW, 0.016, this.BL, 2, 0.0025);
     blackGeo.translate(0, this.BTOP - 0.008, this.BL / 2);
     this.whiteMesh = new THREE.InstancedMesh(whiteGeo, mats.ivory, this.whites.length);
     this.blackMesh = new THREE.InstancedMesh(blackGeo, mats.blackKey, this.blacks.length);
@@ -71,35 +72,47 @@ export class Piano extends THREE.Group {
       this.add(m);
       return m;
     };
-    // Lower and upper case body behind the keys.
-    add(box(caseW, 1.29, 0.58, wood, 0, floorY + 1.29 / 2, -0.17 - 0.29));
-    // Keybed under the keys, cheek blocks at each end, key slip in front.
+    // Lower and upper case body behind the keys, with a recessed lower panel.
+    add(rbox(caseW, 1.29, 0.58, wood, 0, floorY + 1.29 / 2, -0.17 - 0.29, 0.01));
+    add(rbox(1.2, 0.5, 0.02, wood, 0, floorY + 0.33, -0.17 + 0.012, 0.006));
+    add(box(1.26, 0.56, 0.004, mats.ebony, 0, floorY + 0.33, -0.17 + 0.004));
+    // Keybed under the keys, black felt so key gaps read dark, cheek blocks, key slip.
     add(box(1.34, 0.03, 0.2, wood, 0, -0.035, -0.08));
-    add(box(0.055, 0.1, 0.2, wood, -0.6425 - 0.0275, 0.0, -0.08));
-    add(box(0.055, 0.1, 0.2, wood, 0.6425 + 0.0275, 0.0, -0.08));
-    add(box(1.34, 0.028, 0.012, wood, 0, -0.034, 0.007));
+    this.add(box(1.24, 0.004, 0.16, mats.soot, 0, -0.021, -0.075));
+    add(rbox(0.055, 0.1, 0.2, wood, -0.6425 - 0.0275, 0.0, -0.08, 0.006));
+    add(rbox(0.055, 0.1, 0.2, wood, 0.6425 + 0.0275, 0.0, -0.08, 0.006));
+    add(rbox(1.34, 0.028, 0.012, wood, 0, -0.034, 0.007, 0.004));
     // Red felt behind the keys, under the fallboard lip.
     this.add(box(1.24, 0.008, 0.012, mats.felt, 0, 0.004, -g + 0.02));
     // Fallboard (open) leaning back over the rear of the keys.
-    const fall = box(1.34, 0.11, 0.025, wood, 0, 0.085, -g + 0.035);
+    const fall = rbox(1.34, 0.11, 0.025, wood, 0, 0.085, -g + 0.035, 0.006);
     fall.rotation.x = -0.35;
     add(fall);
     // Music desk.
-    const desk = box(0.72, 0.22, 0.012, wood, 0, 0.36, -0.17 + 0.03);
+    const desk = rbox(0.72, 0.22, 0.012, wood, 0, 0.36, -0.17 + 0.03, 0.004);
     desk.rotation.x = -0.28;
     add(desk);
     add(box(0.74, 0.012, 0.05, wood, 0, 0.26, -0.17 + 0.04));
     // Top lid.
-    add(box(caseW + 0.04, 0.03, 0.62, wood, 0, floorY + 1.29 + 0.015, -0.17 - 0.29));
+    add(rbox(caseW + 0.04, 0.03, 0.62, wood, 0, floorY + 1.29 + 0.015, -0.17 - 0.29, 0.008));
+    // Brass hinge strip on the fallboard.
+    this.add(box(1.3, 0.006, 0.012, mats.brass, 0, 0.142, -g + 0.052));
     // Toe blocks and pedals.
     add(box(0.1, 0.09, 0.14, wood, -0.6, floorY + 0.045, -0.12));
     add(box(0.1, 0.09, 0.14, wood, 0.6, floorY + 0.045, -0.12));
-    add(box(0.22, 0.18, 0.06, wood, 0, floorY + 0.09, -0.19));
-    for (const x of [-0.085, 0, 0.085]) {
-      const pedal = box(0.03, 0.012, 0.09, mats.brass, x, floorY + 0.045, -0.13);
-      pedal.rotation.x = 0.18;
-      this.add(pedal);
-    }
+    // One pedal only: the sustain pedal, centred, on a narrow pedal block.
+    add(box(0.12, 0.18, 0.06, wood, 0, floorY + 0.09, -0.19));
+    const pedal = box(0.034, 0.012, 0.1, mats.brass, 0, floorY + 0.045, -0.13);
+    pedal.rotation.x = 0.18;
+    pedal.userData.pedal = 'sustain';
+    this.add(pedal);
+    this.pedals = [pedal];
+    this.sustainPedal = pedal;
+    this.hitMeshes.push(this.sustainPedal);
+    this.sustain = false;
+    this.sustained = new Set();
+    this.lastPedal = -1;
+    this.pedalFloorY = floorY;
   }
 
   writeKey(k) {
@@ -123,6 +136,7 @@ export class Piano extends THREE.Group {
     key.pressedBy.add(p.id);
     p.state.set(this, key);
     if (key.voice) key.voice.release();
+    this.sustained.delete(key);
     key.voice = this.audio.piano(key.midi, vel);
     if (this.recorder) this.recorder.add({ type: 'pianoOn', midi: key.midi, vel });
   }
@@ -131,10 +145,38 @@ export class Piano extends THREE.Group {
     key.pressedBy.delete(p.id);
     if (p.state.get(this) === key) p.state.set(this, null);
     if (!key.pressedBy.size && key.voice) {
-      key.voice.release();
-      key.voice = null;
       if (this.recorder) this.recorder.add({ type: 'pianoOff', midi: key.midi });
+      if (this.sustain) {
+        this.sustained.add(key);
+      } else {
+        key.voice.release();
+        key.voice = null;
+      }
     }
+  }
+
+  // Right pedal: sustain. Released notes keep ringing until the pedal comes up.
+  setSustain(on) {
+    if (this.sustain === on) return;
+    this.sustain = on;
+    this.sustainPedal.rotation.x = on ? 0.32 : 0.18;
+    if (!on) {
+      for (const key of this.sustained) {
+        if (!key.pressedBy.size && key.voice) {
+          key.voice.release();
+          key.voice = null;
+        }
+      }
+      this.sustained.clear();
+    }
+    if (this.recorder) this.recorder.add({ type: 'sustain', on });
+  }
+
+  togglePedal() {
+    const now = performance.now();
+    if (now - this.lastPedal < 300) return;
+    this.lastPedal = now;
+    this.setSustain(!this.sustain);
   }
 
   // Playback helpers: a ghost pointer holds keys down exactly as the player did.
@@ -179,6 +221,17 @@ export class Piano extends THREE.Group {
         this.releaseKey(key, p);
       }
     }
+    // Tap the right pedal with a hand to toggle sustain.
+    for (const p of pointers) {
+      if (!p.active || !p.wasActive) continue;
+      _tip.copy(p.tip);
+      this.worldToLocal(_tip);
+      const top = this.pedalFloorY + 0.055;
+      if (Math.abs(_tip.x) > 0.035 || _tip.z < -0.19 || _tip.z > -0.07) continue;
+      _prev.copy(p.prev);
+      this.worldToLocal(_prev);
+      if (_prev.y > top && _tip.y <= top && _tip.y > top - 0.04) this.togglePedal();
+    }
     let wDirty = false, bDirty = false;
     for (const k of this.keys) {
       const target = k.pressedBy.size ? 1 : 0;
@@ -195,9 +248,40 @@ export class Piano extends THREE.Group {
     if (bDirty) this.blackMesh.instanceMatrix.needsUpdate = true;
   }
 
+  keyFromHit(hit) {
+    if (hit.object === this.blackMesh) return this.blacks[hit.instanceId];
+    if (hit.object === this.whiteMesh) return this.whites[hit.instanceId];
+    return null;
+  }
+
   desktopDown(hit, p) {
-    const key = hit.object === this.blackMesh ? this.blacks[hit.instanceId] : this.whites[hit.instanceId];
+    if (hit.object.userData.pedal) {
+      if (hit.object.userData.pedal === 'sustain') this.togglePedal();
+      return;
+    }
+    const key = this.keyFromHit(hit);
     if (key) this.pressKey(key, p, 0.7);
+  }
+
+  // Dragging across the keys plays each one in turn: a glissando.
+  desktopMove(hit, p) {
+    if (hit.object.userData.pedal) return;
+    const key = this.keyFromHit(hit);
+    const held = p.state.get(this) || null;
+    if (!key || key === held) return;
+    if (held) this.releaseKey(held, p);
+    this.pressKey(key, p, 0.6);
+  }
+
+  // Computer keyboard: one virtual pointer per physical key so chords hold.
+  pressMidi(midi, p, vel = 0.75) {
+    const key = this.byMidi.get(midi);
+    if (key && !key.pressedBy.has(p.id)) this.pressKey(key, p, vel);
+  }
+
+  releaseMidi(midi, p) {
+    const key = this.byMidi.get(midi);
+    if (key && key.pressedBy.has(p.id)) this.releaseKey(key, p);
   }
 
   desktopUp(p) {

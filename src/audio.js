@@ -150,8 +150,8 @@ export class AudioEngine {
     const f = mtof(midi);
     const p =
       kind === 'guitar'
-        ? { seconds: clamp(5.5 - (midi - 40) * 0.07, 1.2, 5.5), bright: 0.8, pick: 0.13 }
-        : { seconds: clamp(4.5 - (midi - 48) * 0.08, 0.7, 4.5), bright: 0.5, pick: 0.32 };
+        ? { seconds: clamp(5.5 - (midi - 40) * 0.07, 1.2, 5.5), bright: clamp(0.42 + (midi - 40) * 0.014, 0.42, 0.85), pick: 0.13 }
+        : { seconds: clamp(4.5 - (midi - 48) * 0.08, 0.7, 4.5), bright: clamp(0.3 + (midi - 48) * 0.009, 0.3, 0.62), pick: 0.32 };
     const n = Math.floor(sr * p.seconds);
     const out = new Float32Array(n);
     const D = sr / f - 0.5;
@@ -181,7 +181,7 @@ export class AudioEngine {
     const sr = this.ctx.sampleRate;
     const f = mtof(midi);
     const u = (midi - 21) / 87;
-    const seconds = clamp(6 - u * 4.8, 1.0, 6);
+    const seconds = clamp(7 - u * 5.6, 1.1, 7);
     const off = new OfflineAudioContext(1, Math.floor(sr * seconds), sr);
     const out = off.createGain();
     out.gain.value = 0.5;
@@ -192,8 +192,8 @@ export class AudioEngine {
     for (let k = 1; k <= 12; k++) {
       const fk = f * k * Math.sqrt(1 + B * k * k);
       if (fk > nyq) break;
-      const amp = Math.pow(k, -(1.05 + 0.7 * u)) * (k === 1 ? 1 : 0.9);
-      const tau = (seconds / 3.4) / (1 + 0.5 * (k - 1));
+      const amp = Math.pow(k, -(0.9 + 0.75 * u)) * (k === 1 ? 1 : 0.9);
+      const tau = (seconds / 2.9) / (1 + 0.5 * (k - 1));
       for (const cents of [-detune / 2, detune / 2]) {
         const o = off.createOscillator();
         o.type = 'sine';
@@ -230,7 +230,26 @@ export class AudioEngine {
     return rendered;
   }
 
-  playBuffer(buf, { t, level, cutoff, send, voice }) {
+  // Two gentle resonant peaks stand in for an acoustic guitar body (air and top-plate modes).
+  guitarBody() {
+    if (this.body) return this.body;
+    const c = this.ctx;
+    const air = c.createBiquadFilter();
+    air.type = 'peaking';
+    air.frequency.value = 105;
+    air.Q.value = 2.5;
+    air.gain.value = 6;
+    const top = c.createBiquadFilter();
+    top.type = 'peaking';
+    top.frequency.value = 215;
+    top.Q.value = 2;
+    top.gain.value = 3.5;
+    air.connect(top).connect(this.master);
+    this.body = air;
+    return air;
+  }
+
+  playBuffer(buf, { t, level, cutoff, send, voice, body = false }) {
     const c = this.ctx;
     const src = c.createBufferSource();
     src.buffer = buf;
@@ -240,7 +259,7 @@ export class AudioEngine {
     f.Q.value = 0.4;
     const g = c.createGain();
     g.gain.value = level;
-    src.connect(f).connect(g).connect(this.master);
+    src.connect(f).connect(g).connect(body ? this.guitarBody() : this.master);
     if (send > 0) {
       const s = c.createGain();
       s.gain.value = send;
@@ -249,6 +268,103 @@ export class AudioEngine {
     src.start(Math.max(t, c.currentTime));
     voice.attach(src, g);
     return voice;
+  }
+
+  // Ambience: fireplace crackle and wind, each on its own gain so they can be switched.
+  ensureAmbience() {
+    if (!this.started || this.amb) return;
+    const c = this.ctx;
+    const amb = { fireOn: false, windOn: false };
+    const ramp = (g, v) => {
+      g.gain.cancelScheduledValues(c.currentTime);
+      g.gain.setTargetAtTime(v, c.currentTime, 0.4);
+    };
+    amb.ramp = ramp;
+
+    // Fire: low noise bed with slow breathing, plus random pops from the timer below.
+    amb.fire = c.createGain();
+    amb.fire.gain.value = 0;
+    amb.fire.connect(this.master);
+    const bed = c.createBufferSource();
+    bed.buffer = this.noise;
+    bed.loop = true;
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 420;
+    const bg = c.createGain();
+    bg.gain.value = 0.035;
+    const lfo = c.createOscillator();
+    lfo.frequency.value = 0.17;
+    const lfoGain = c.createGain();
+    lfoGain.gain.value = 0.012;
+    lfo.connect(lfoGain).connect(bg.gain);
+    bed.connect(lp).connect(bg).connect(amb.fire);
+    bed.start();
+    lfo.start();
+    amb.popTimer = setInterval(() => {
+      if (!amb.fireOn || Math.random() > 0.65) return;
+      const t = c.currentTime + Math.random() * 0.2;
+      this.noiseVoice(t, { bp: 1600 + Math.random() * 3500, q: 2.5, peak: 0.02 + Math.random() * 0.05, decay: 0.012 + Math.random() * 0.03 });
+    }, 110);
+
+    // Wind: a deep rumble and a wandering whistle, both gusting slowly.
+    amb.wind = c.createGain();
+    amb.wind.gain.value = 0;
+    amb.wind.connect(this.master);
+    const rumbleSrc = c.createBufferSource();
+    rumbleSrc.buffer = this.noise;
+    rumbleSrc.loop = true;
+    const rlp = c.createBiquadFilter();
+    rlp.type = 'lowpass';
+    rlp.frequency.value = 260;
+    const rg = c.createGain();
+    rg.gain.value = 0.05;
+    const gust = c.createOscillator();
+    gust.frequency.value = 0.07;
+    const gustGain = c.createGain();
+    gustGain.gain.value = 0.03;
+    gust.connect(gustGain).connect(rg.gain);
+    rumbleSrc.connect(rlp).connect(rg).connect(amb.wind);
+    const whistleSrc = c.createBufferSource();
+    whistleSrc.buffer = this.noise;
+    whistleSrc.loop = true;
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 650;
+    bp.Q.value = 6;
+    const sweep = c.createOscillator();
+    sweep.frequency.value = 0.11;
+    const sweepGain = c.createGain();
+    sweepGain.gain.value = 320;
+    sweep.connect(sweepGain).connect(bp.frequency);
+    const wg = c.createGain();
+    wg.gain.value = 0.05;
+    const wlfo = c.createOscillator();
+    wlfo.frequency.value = 0.05;
+    const wlfoGain = c.createGain();
+    wlfoGain.gain.value = 0.035;
+    wlfo.connect(wlfoGain).connect(wg.gain);
+    whistleSrc.connect(bp).connect(wg).connect(amb.wind);
+    rumbleSrc.start();
+    whistleSrc.start();
+    gust.start();
+    sweep.start();
+    wlfo.start();
+    this.amb = amb;
+  }
+
+  setFire(on) {
+    this.ensureAmbience();
+    if (!this.amb) return;
+    this.amb.fireOn = on;
+    this.amb.ramp(this.amb.fire, on ? 1 : 0);
+  }
+
+  setWind(on) {
+    this.ensureAmbience();
+    if (!this.amb) return;
+    this.amb.windOn = on;
+    this.amb.ramp(this.amb.wind, on ? 1 : 0);
   }
 
   // ---- public instrument API ----
@@ -282,6 +398,7 @@ export class AudioEngine {
       cutoff: guitar ? 1400 + vel * 8000 : 1000 + vel * 5000,
       send: guitar ? 0.16 : 0.34,
       voice,
+      body: guitar,
     });
   }
 
@@ -393,41 +510,41 @@ export class AudioEngine {
     switch (kind) {
       case 'kick':
         this.toneVoice(t, { f0: 165, f1: 46, slide: 0.09, peak: 1.0 * vel, decay: 0.42 + 0.1 * vel, lp: 2500 });
-        this.noiseVoice(t, { bp: 3200, q: 0.7, peak: 0.25 * v2, decay: 0.02 });
+        this.noiseVoice(t, { bp: 3200, q: 0.7, peak: 0.34 * v2, decay: 0.02 });
         break;
       case 'snare':
-        this.toneVoice(t, { type: 'triangle', f0: 195, f1: 150, slide: 0.05, peak: 0.6 * vel, decay: 0.18 });
+        this.toneVoice(t, { type: 'triangle', f0: 195, f1: 150, slide: 0.05, peak: 0.5 * vel, decay: 0.18 });
         this.toneVoice(t, { f0: 330, f1: 280, slide: 0.04, peak: 0.3 * vel, decay: 0.1 });
-        this.noiseVoice(t, { hp: 1400, lp: 9000, peak: 0.8 * Math.pow(vel, 1.3), decay: 0.2 + 0.08 * vel, send: 0.3 });
+        this.noiseVoice(t, { hp: 1400, lp: 9000, peak: 0.66 * Math.pow(vel, 1.3), decay: 0.2 + 0.08 * vel, send: 0.3 });
         break;
       case 'hat':
-        this.metalVoice(t, { peak: 0.45 * vel, decay: 0.07 + 0.03 * vel });
-        this.noiseVoice(t, { hp: 9000, peak: 0.22 * vel, decay: 0.06 });
+        this.metalVoice(t, { peak: 0.62 * vel, decay: 0.08 + 0.03 * vel });
+        this.noiseVoice(t, { hp: 9000, peak: 0.4 * vel, decay: 0.07 });
         break;
       case 'hatOpen':
-        this.metalVoice(t, { peak: 0.45 * vel, decay: 0.42, send: 0.1 });
-        this.noiseVoice(t, { hp: 8000, peak: 0.2 * vel, decay: 0.35 });
+        this.metalVoice(t, { peak: 0.52 * vel, decay: 0.42, send: 0.1 });
+        this.noiseVoice(t, { hp: 8000, peak: 0.32 * vel, decay: 0.35 });
         break;
       case 'tom1':
-        this.toneVoice(t, { f0: 210, f1: 140, slide: 0.12, peak: 0.9 * vel, decay: 0.45, send: 0.15 });
-        this.noiseVoice(t, { bp: 1500, q: 0.5, peak: 0.12 * vel, decay: 0.03 });
+        this.toneVoice(t, { f0: 210, f1: 140, slide: 0.12, peak: 0.9 * vel, decay: 0.62, send: 0.15 });
+        this.noiseVoice(t, { bp: 2500, q: 0.6, peak: 0.26 * vel, decay: 0.03 });
         break;
       case 'tom2':
-        this.toneVoice(t, { f0: 165, f1: 105, slide: 0.14, peak: 0.9 * vel, decay: 0.55, send: 0.15 });
-        this.noiseVoice(t, { bp: 1200, q: 0.5, peak: 0.12 * vel, decay: 0.03 });
+        this.toneVoice(t, { f0: 165, f1: 105, slide: 0.14, peak: 0.9 * vel, decay: 0.78, send: 0.15 });
+        this.noiseVoice(t, { bp: 2200, q: 0.6, peak: 0.26 * vel, decay: 0.03 });
         break;
       case 'floor':
-        this.toneVoice(t, { f0: 115, f1: 72, slide: 0.16, peak: 1.0 * vel, decay: 0.7, send: 0.15 });
-        this.noiseVoice(t, { bp: 900, q: 0.5, peak: 0.12 * vel, decay: 0.03 });
+        this.toneVoice(t, { f0: 115, f1: 72, slide: 0.16, peak: 1.0 * vel, decay: 1.0, send: 0.15 });
+        this.noiseVoice(t, { bp: 1800, q: 0.6, peak: 0.24 * vel, decay: 0.03 });
         break;
       case 'crash':
         this.noiseVoice(t, { bp: 5500, q: 0.4, hp: 2800, peak: 0.55 * vel, decay: 1.6 + 0.6 * vel, send: 0.25 });
         this.metalVoice(t, { ratio: 1.7, bp: 6000, hp: 3000, peak: 0.22 * vel, decay: 1.2, send: 0.2 });
         break;
       case 'ride':
-        this.metalVoice(t, { ratio: 1.3, bp: 7000, hp: 4000, peak: 0.3 * vel, decay: 0.9, send: 0.15 });
-        this.toneVoice(t, { f0: 2900, peak: 0.18 * vel, decay: 0.5 });
-        this.noiseVoice(t, { hp: 6000, peak: 0.12 * vel, decay: 0.5 });
+        this.metalVoice(t, { ratio: 1.3, bp: 7000, hp: 4000, peak: 0.42 * vel, decay: 1.1, send: 0.15 });
+        this.toneVoice(t, { f0: 2900, peak: 0.26 * vel, decay: 0.6 });
+        this.noiseVoice(t, { hp: 6000, peak: 0.17 * vel, decay: 0.6 });
         break;
     }
   }

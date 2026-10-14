@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { cylinderBetween } from '../materials.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
@@ -27,19 +28,26 @@ export class Drums extends THREE.Group {
     this.addCymbal('ride', 0.26, [0.72, 1.18, -0.86], 0.3);
   }
 
+  // Pole plus tripod legs, merged into a single chrome mesh.
   stand(top, legs = true) {
     const m = this.mats;
     const base = new THREE.Vector3(top.x, 0, top.z);
-    const pole = cylinderBetween(base, top, 0.011, m.chrome, 10);
-    this.add(pole);
+    const parts = [cylinderBetween(base, top, 0.011, m.chrome, 10)];
     if (legs) {
       for (let i = 0; i < 3; i++) {
         const a = (i / 3) * Math.PI * 2 + 0.4;
         const foot = new THREE.Vector3(top.x + Math.cos(a) * 0.3, 0.01, top.z + Math.sin(a) * 0.3);
         const hip = new THREE.Vector3(top.x, 0.32, top.z);
-        this.add(cylinderBetween(hip, foot, 0.007, m.chrome, 6));
+        parts.push(cylinderBetween(hip, foot, 0.007, m.chrome, 6));
       }
     }
+    const geos = parts.map((p) => {
+      p.updateMatrix();
+      return p.geometry.applyMatrix4(p.matrix);
+    });
+    const mesh = new THREE.Mesh(mergeGeometries(geos), m.chrome);
+    mesh.castShadow = true;
+    this.add(mesh);
   }
 
   shellGroup(r, depth, shellMat, head) {
@@ -57,23 +65,21 @@ export class Drums extends THREE.Group {
     bottom.rotation.x = Math.PI / 2;
     bottom.position.y = -depth - 0.001;
     g.add(bottom);
+    const chromeGeos = [];
     for (const y of [0, -depth]) {
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(r + 0.006, 0.007, 10, 64), m.chrome);
-      rim.rotation.x = Math.PI / 2;
-      rim.position.y = y;
-      g.add(rim);
+      const rim = new THREE.TorusGeometry(r + 0.006, 0.007, 10, 64);
+      rim.rotateX(Math.PI / 2);
+      rim.translate(0, y, 0);
+      chromeGeos.push(rim);
     }
-    const lugGeo = new THREE.BoxGeometry(0.018, 0.05, 0.014);
-    const lugs = new THREE.InstancedMesh(lugGeo, m.chrome, 8);
-    const d = new THREE.Object3D();
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
-      d.position.set(Math.cos(a) * (r + 0.012), -depth / 2, Math.sin(a) * (r + 0.012));
-      d.rotation.set(0, -a, 0);
-      d.updateMatrix();
-      lugs.setMatrixAt(i, d.matrix);
+      const lug = new THREE.BoxGeometry(0.018, 0.05, 0.014);
+      lug.rotateY(-a);
+      lug.translate(Math.cos(a) * (r + 0.012), -depth / 2, Math.sin(a) * (r + 0.012));
+      chromeGeos.push(lug);
     }
-    g.add(lugs);
+    g.add(new THREE.Mesh(mergeGeometries(chromeGeos), m.chrome));
     return { g, top };
   }
 
@@ -118,14 +124,14 @@ export class Drums extends THREE.Group {
       new THREE.Vector2(r, -0.0015),
       new THREE.Vector2(0.004, -0.0015),
     ];
-    const cym = new THREE.Mesh(new THREE.LatheGeometry(profile, 64), m.brass);
+    const cym = new THREE.Mesh(new THREE.LatheGeometry(profile, 64), m.cymbal);
     cym.castShadow = true;
     g.add(cym);
     const nut = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.02, 12), m.chrome);
     nut.position.y = 0.022;
     g.add(nut);
     if (hihat) {
-      const lower = new THREE.Mesh(new THREE.LatheGeometry(profile, 64), m.brass);
+      const lower = new THREE.Mesh(new THREE.LatheGeometry(profile, 64), m.cymbal);
       lower.rotation.x = Math.PI;
       lower.position.y = -0.02;
       g.add(lower);

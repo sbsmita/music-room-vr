@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { cylinderBetween, box } from '../materials.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const _tip = new THREE.Vector3();
@@ -81,6 +82,7 @@ export class Harp extends THREE.Group {
 
   buildStrings(mats) {
     const n = 22;
+    const pinGeos = [];
     for (let i = 0; i < n; i++) {
       const t = i / (n - 1);
       const bottom = new THREE.Vector3().lerpVectors(this.sb0, this.sb1, t * 0.96);
@@ -92,12 +94,13 @@ export class Harp extends THREE.Group {
       const mat = degree === 0 ? mats.harpStringC : degree === 3 ? mats.harpStringF : mats.harpString;
       const mesh = cylinderBetween(bottom, top, 0.0014 - t * 0.0005, mat, 5);
       this.add(mesh);
-      const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.02, 8), mats.brass);
-      pin.position.copy(top).add(new THREE.Vector3(0, 0, 0.03));
-      pin.rotation.x = Math.PI / 2;
-      this.add(pin);
+      const pin = new THREE.CylinderGeometry(0.004, 0.004, 0.02, 8);
+      pin.rotateX(Math.PI / 2);
+      pin.translate(top.x, top.y, top.z + 0.03);
+      pinGeos.push(pin);
       this.strings.push({ i, midi, a: bottom, b: top, mesh, lastPluck: -1, flash: 0 });
     }
+    this.add(new THREE.Mesh(mergeGeometries(pinGeos), mats.brass));
   }
 
   // Signed side of the string line within the plane, and the parameter along it.
