@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { setupXRButtons } from './xr.js';
+import { ARMode } from './ar.js';
 import { LookControls } from './look.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { AudioEngine } from './audio.js';
@@ -17,7 +18,8 @@ import { HoverGlow } from './hover.js';
 
 const audio = new AudioEngine();
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+// alpha so passthrough shows through in mixed reality
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -140,11 +142,13 @@ const rigs = [
   { group: guitarRig, instruments: [guitar, board], name: 'guitar' },
   { group: tableRig, instruments: [deck, panel], name: 'table' },
 ];
-const rigOf = new Map();
-for (const r of rigs) for (const inst of r.instruments) rigOf.set(inst, r);
+const pianoRig = { group: piano, instruments: [piano], name: 'piano' };
+let activeRigs = rigs;
+const rigOfInst = (inst) => activeRigs.find((r) => r.instruments.includes(inst)) || null;
 scene.updateMatrixWorld(true);
 const pianoZone = new THREE.Box3().setFromObject(piano).expandByScalar(0.12);
 for (const r of rigs) r.zone = new THREE.Box3().setFromObject(r.group).expandByScalar(0.12);
+pianoRig.zone = pianoZone;
 const hoverGlow = new HoverGlow(scene, 16);
 const grabRing = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 48), new THREE.MeshBasicMaterial({ color: 0xffc46a, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
 grabRing.rotation.x = -Math.PI / 2;
@@ -199,9 +203,47 @@ function addGuitarStand(parent, pos) {
 // ---- overlay / audio start ----
 const overlay = document.getElementById('overlay');
 const hint = document.getElementById('hint');
-const vrButton = VRButton.createButton(renderer, { optionalFeatures: ['hand-tracking'] });
-document.body.appendChild(vrButton);
-vrButton.addEventListener('click', startAudio);
+// ---- mixed reality: the piano on a real surface ----
+const pianoHome = { position: piano.position.clone(), rotation: piano.rotation.clone() };
+const ar = new ARMode({
+  renderer,
+  scene,
+  camera,
+  piano,
+  input,
+  onPlaced: () => {
+    pianoZone.setFromObject(piano).expandByScalar(0.12);
+    syncAudioPositions();
+  },
+});
+function enterAR(session) {
+  startAudio();
+  room.group.visible = false;
+  for (const r of rigs) r.group.visible = false;
+  activeRigs = [pianoRig];
+  scene.background = null;
+  rig.position.set(0, 0, 0);
+  rig.rotation.set(0, 0, 0);
+  panel.toggles.forEach((t) => {
+    if (t.on) panel.flip(t);
+  });
+  ar.enter(session);
+  hint.textContent = 'Point at a table or the floor and pinch to place the piano. Pinch it to drag; pinch empty air to place again.';
+  session.addEventListener('end', () => {
+    room.group.visible = true;
+    for (const r of rigs) r.group.visible = true;
+    activeRigs = rigs;
+    scene.background = new THREE.Color(0x05070f);
+    piano.visible = true;
+    piano.position.copy(pianoHome.position);
+    piano.rotation.copy(pianoHome.rotation);
+    piano.updateMatrixWorld(true);
+    pianoZone.setFromObject(piano).expandByScalar(0.12);
+    syncAudioPositions();
+    hint.textContent = 'Drag to look around, scroll to zoom. Shift+drag an instrument to move it closer.';
+  });
+}
+setupXRButtons(renderer, { onVR: () => startAudio(), onAR: enterAR });
 
 function startAudio() {
   if (audio.started) return;
@@ -216,7 +258,7 @@ function startAudio() {
 }
 renderer.xr.addEventListener('sessionstart', () => {
   startAudio();
-  hint.textContent = 'Pinch empty air and pull sideways to swivel your seat.';
+  if (!ar.active) hint.textContent = 'Pinch empty air and pull sideways to swivel your seat.';
 });
 
 // ---- desktop mouse: becomes a pointer that lives on the surface it clicked ----
@@ -347,11 +389,11 @@ function headLocalX(worldPoint) {
 }
 function nearInstrument(point) {
   if (pianoZone.containsPoint(point)) return true;
-  for (const r of rigs) if (r.zone.containsPoint(point)) return true;
+  for (const r of activeRigs) if (r.zone.containsPoint(point)) return true;
   return false;
 }
 function rigNear(point) {
-  for (const r of rigs) if (r.zone.containsPoint(point)) return r;
+  for (const r of activeRigs) if (r.zone.containsPoint(point)) return r;
   return null;
 }
 
@@ -413,14 +455,18 @@ const _lq = new THREE.Quaternion();
 
 window.musicRoom.grab = { startGrab, moveGrab, endGrab, state: grab };
 window.musicRoom.syncAudioPositions = syncAudioPositions;
+window.musicRoom.ar = ar;
+window.musicRoom.pianoHome = pianoHome;
 function updateGrab() {
   if (!renderer.xr.isPresenting) return;
+  if (ar.active && (ar.placing || ar.placedThisFrame)) return;
   for (const h of input.hands) {
     if (!h.connected) continue;
     const p = h.pointers[0];
     if (!grab.rig && h.pinchStart && p.active) {
       const rig = rigNear(p.tip);
       if (rig) startGrab(rig, p.tip, h);
+      else if (ar.active) ar.startPlacing();
     }
     if (grab.hand !== h) continue;
     if (h.pinchEnd || !p.active) endGrab();
@@ -435,7 +481,7 @@ function snapTurn(rad) {
   rig.position.add(_head.sub(_v));
 }
 function updateSwivel() {
-  if (!renderer.xr.isPresenting) return;
+  if (!renderer.xr.isPresenting || ar.active) return;
   for (const h of input.hands) {
     if (!h.connected) continue;
     const p = h.pointers[0];
@@ -463,17 +509,19 @@ window.addEventListener('resize', () => {
 });
 
 const timer = new THREE.Timer();
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((time, frame) => {
   timer.update();
   const dt = Math.min(timer.getDelta(), 0.05);
   input.update(dt);
   for (const inst of instruments) {
-    const rig = rigOf.get(inst);
+    if (ar.active && inst !== piano) continue;
+    const rig = rigOfInst(inst);
     if (rig && rig.grabbed) continue;
     inst.update(input.pointers, dt);
     if (inst.hover) inst.hover(input.pointers, hoverGlow);
   }
   hoverGlow.update(dt);
+  ar.update(frame);
   updateGrab();
   updateListener();
   recorder.update();

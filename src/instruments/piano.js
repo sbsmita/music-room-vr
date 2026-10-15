@@ -73,10 +73,18 @@ export class Piano extends THREE.Group {
       this.add(m);
       return m;
     };
-    // Lower and upper case body behind the keys, with a recessed lower panel.
-    add(rbox(caseW, 1.29, 0.58, wood, 0, floorY + 1.29 / 2, -0.17 - 0.29, 0.01));
-    add(rbox(1.2, 0.5, 0.02, wood, 0, floorY + 0.33, -0.17 + 0.012, 0.006));
-    add(box(1.26, 0.56, 0.004, mats.ebony, 0, floorY + 0.33, -0.17 + 0.004));
+    // Case split at the keybed: the lower cabinet can be hidden when the piano sits on a table.
+    this.lowerParts = [];
+    const lower = (m) => {
+      m.userData.lower = true;
+      this.lowerParts.push(m);
+      return m;
+    };
+    const lowerH = 0.72 - 0.05, upperH = 1.29 - lowerH;
+    lower(add(rbox(caseW, lowerH, 0.58, wood, 0, floorY + lowerH / 2, -0.17 - 0.29, 0.01)));
+    add(rbox(caseW, upperH, 0.58, wood, 0, floorY + lowerH + upperH / 2, -0.17 - 0.29, 0.01));
+    lower(add(rbox(1.2, 0.5, 0.02, wood, 0, floorY + 0.33, -0.17 + 0.012, 0.006)));
+    lower(add(box(1.26, 0.56, 0.004, mats.ebony, 0, floorY + 0.33, -0.17 + 0.004)));
     // Keybed under the keys, black felt so key gaps read dark, cheek blocks, key slip.
     add(box(1.34, 0.03, 0.2, wood, 0, -0.035, -0.08));
     this.add(box(1.24, 0.004, 0.16, mats.soot, 0, -0.021, -0.075));
@@ -98,15 +106,20 @@ export class Piano extends THREE.Group {
     add(rbox(caseW + 0.04, 0.03, 0.62, wood, 0, floorY + 1.29 + 0.015, -0.17 - 0.29, 0.008));
     // Brass hinge strip on the fallboard.
     this.add(box(1.3, 0.006, 0.012, mats.brass, 0, 0.142, -g + 0.052));
-    // Toe blocks and pedals.
-    add(box(0.1, 0.09, 0.14, wood, -0.6, floorY + 0.045, -0.12));
-    add(box(0.1, 0.09, 0.14, wood, 0.6, floorY + 0.045, -0.12));
-    // One pedal only: the sustain pedal, centred, on a narrow pedal block.
-    add(box(0.12, 0.18, 0.06, wood, 0, floorY + 0.09, -0.19));
-    const pedal = box(0.034, 0.012, 0.1, mats.brass, 0, floorY + 0.045, -0.13);
+    // Toe blocks and the pedal assembly: a block plus the single sustain pedal, grouped so the
+    // pedal can drop to the floor when the piano sits on a table.
+    lower(add(box(0.1, 0.09, 0.14, wood, -0.6, floorY + 0.045, -0.12)));
+    lower(add(box(0.1, 0.09, 0.14, wood, 0.6, floorY + 0.045, -0.12)));
+    this.pedalRig = new THREE.Group();
+    this.pedalRig.position.y = floorY;
+    const block = box(0.12, 0.18, 0.06, wood, 0, 0.09, -0.19);
+    block.castShadow = true;
+    this.pedalRig.add(block);
+    const pedal = box(0.034, 0.012, 0.1, mats.brass, 0, 0.045, -0.13);
     pedal.rotation.x = 0.18;
     pedal.userData.pedal = 'sustain';
-    this.add(pedal);
+    this.pedalRig.add(pedal);
+    this.add(this.pedalRig);
     this.pedals = [pedal];
     this.sustainPedal = pedal;
     this.hitMeshes.push(this.sustainPedal);
@@ -154,6 +167,18 @@ export class Piano extends THREE.Group {
         key.voice = null;
       }
     }
+  }
+
+  // Mixed reality: on a table, hide the lower cabinet and drop the pedal to the real floor.
+  // surfaceY is the surface height above the floor; the piano's origin sits 0.05 above it.
+  setOnSurface(surfaceY, onTable) {
+    for (const m of this.lowerParts) m.visible = !onTable;
+    this.pedalRig.position.y = onTable ? -(surfaceY + 0.05) : this.pedalFloorY;
+  }
+
+  resetSurface() {
+    for (const m of this.lowerParts) m.visible = true;
+    this.pedalRig.position.y = this.pedalFloorY;
   }
 
   // Right pedal: sustain. Released notes keep ringing until the pedal comes up.
@@ -227,7 +252,7 @@ export class Piano extends THREE.Group {
       if (!p.active || !p.wasActive) continue;
       _tip.copy(p.tip);
       this.worldToLocal(_tip);
-      const top = this.pedalFloorY + 0.055;
+      const top = this.pedalRig.position.y + 0.055;
       if (Math.abs(_tip.x) > 0.035 || _tip.z < -0.19 || _tip.z > -0.07) continue;
       _prev.copy(p.prev);
       this.worldToLocal(_prev);
