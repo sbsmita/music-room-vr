@@ -19,15 +19,17 @@ export class Drums extends THREE.Group {
     this.time = 0;
     this.recorder = null;
 
-    this.addDrum('snare', 0.18, 0.14, [0, 0.74, -0.42], 0.1, mats.pearl);
-    this.addDrum('tom1', 0.15, 0.2, [0.1, 0.92, -0.72], 0.4, mats.shell);
-    this.addDrum('tom2', 0.165, 0.22, [0.43, 0.9, -0.66], 0.4, mats.shell);
-    this.addDrum('floor', 0.2, 0.36, [0.55, 0.64, -0.26], 0.05, mats.shell);
-    this.addKick(0.28, 0.4, [0.26, 0.29, -0.52]);
-    this.addKickPad([-0.22, 0.6, -0.26]);
-    this.addCymbal('hat', 0.17, [-0.35, 0.92, -0.5], 0.12, true);
-    this.addCymbal('crash', 0.21, [-0.3, 1.32, -0.95], 0.35);
-    this.addCymbal('ride', 0.26, [0.72, 1.18, -0.86], 0.3);
+    // Everything within a seated reach of the throne, which sits about 0.2 m toward +z from the
+    // kit's origin: cymbals low and pulled in, toms close over the snare.
+    this.addDrum('snare', 0.18, 0.14, [0, 0.72, -0.3], 0.1, mats.pearl);
+    this.addDrum('tom1', 0.15, 0.2, [-0.04, 0.86, -0.5], 0.45, mats.shell);
+    this.addDrum('tom2', 0.165, 0.22, [0.27, 0.85, -0.48], 0.45, mats.shell);
+    this.addDrum('floor', 0.2, 0.36, [0.42, 0.62, -0.1], 0.05, mats.shell);
+    this.addKick(0.28, 0.4, [0.14, 0.29, -0.72]);
+    this.addKickPad([-0.27, 0.6, -0.2]);
+    this.addCymbal('hat', 0.17, [-0.4, 0.78, -0.24], 0.12, true);
+    this.addCymbal('crash', 0.21, [-0.36, 0.98, -0.44], 0.35);
+    this.addCymbal('ride', 0.26, [0.44, 0.95, -0.34], 0.3);
   }
 
   // Pole plus tripod legs, merged into a single chrome mesh.
@@ -173,23 +175,28 @@ export class Drums extends THREE.Group {
   }
 
   registerPiece(kind, group, r, type) {
-    const piece = { kind, group, r, type, flash: 0, wobble: 0, wobblePhase: 0, lastHit: -1 };
+    const piece = { kind, group, r, type, flash: 0, wobble: 0, wobblePhase: 0, lastHit: -1, id: this.pieces.length };
     this.pieces.push(piece);
     return piece;
   }
 
-  hit(piece, vel, p = null) {
+  hit(piece, vel, p = null, force = false) {
     const now = performance.now();
-    // A short per-piece window collapses same-stroke duplicates; a longer one per pointer stops
-    // one hand retriggering, while still letting the other hand or stick play a flam or a roll.
-    if (now - piece.lastHit < 12) return;
+    // A tiny per-piece window collapses duplicates that arrive within the same frame. The 45 ms
+    // window is per HAND (every fingertip of that hand is stamped) or per stick, so one hand's
+    // other fingers can't retrigger a hit, while the other hand or stick can still play a flam.
+    if (!force && now - piece.lastHit < 3) return;
     if (p) {
-      const key = 'hit:' + piece.kind;
+      const key = 'hit:' + piece.id;
       const last = p.state.get(key) || -1;
       if (now - last < 45) return;
+      const group = p.hand && p.hand.pointers && p.hand.pointers.length ? p.hand.pointers : [p];
+      for (const q of group) q.state.set(key, now);
       p.state.set(key, now);
     }
     piece.lastHit = now;
+    // A hand that is drumming is not grabbing: its pinches are ignored for a moment.
+    if (p && p.hand) p.hand.lastPlay = now;
     this.audio.drum(piece.kind, vel);
     if (this.recorder) this.recorder.add({ type: 'drum', kind: piece.kind, vel });
     piece.flash = 1;
@@ -212,20 +219,24 @@ export class Drums extends THREE.Group {
         piece.group.worldToLocal(_prev);
         // Re-arm only once the pointer has risen clearly above the head, so jitter while parked
         // just below the surface cannot retrigger.
-        const armKey = 'arm:' + piece.kind;
+        const armKey = 'arm:' + piece.id;
         if (_tip.y > 0.02 || _prev.y > 0.02) p.state.set(armKey, true);
-        if (!(_prev.y > 0 && _tip.y <= 0) || _prev.y > 0.35) continue;
+        // Fingertips start a stroke from close above the head; only sticks come from higher up.
+        if (!(_prev.y > 0 && _tip.y <= 0) || _prev.y > (p.stick ? 0.35 : 0.1)) continue;
         if (p.state.get(armKey) === false) continue;
         // Test where the path crossed the head, not where it ended, so fast strokes count.
         const t = _prev.y / (_prev.y - _tip.y);
         const cx = _prev.x + (_tip.x - _prev.x) * t, cz = _prev.z + (_tip.z - _prev.z) * t;
         if (cx * cx + cz * cz > piece.r * piece.r) continue;
-        const vy = (_prev.y - _tip.y) / Math.max(dt, 1e-3);
-        // Sticks move faster than fingertips and need headroom: taps soft, full strokes loud.
+        // Any pass through the head disarms, sounding or not, so a gently placed finger or stick
+        // must rise clear of the head before it can strike again.
+        p.state.set(armKey, false);
+        const vy = (_prev.y - _tip.y) / Math.max(p.sampleDt || dt, 1e-3);
+        // Sticks move faster than fingertips and need headroom: taps soft, a full stroke (about
+        // 3 m/s with a stick, 1.5 m/s with a fingertip) is as loud as the kit goes.
         const v0 = p.stick ? 0.6 : 0.2;
         if (vy < v0) continue;
-        const vel = p.stick ? clamp(Math.sqrt((vy - v0) / 6.4), 0.12, 1) : clamp((vy - v0) / 2.4, 0.15, 1);
-        p.state.set(armKey, false);
+        const vel = p.stick ? clamp(Math.sqrt((vy - v0) / 2.4), 0.15, 1) : clamp((vy - v0) / 1.3, 0.2, 1);
         this.hit(piece, vel, p);
       }
       piece.flash = Math.max(0, piece.flash - dt * 6);
@@ -250,7 +261,7 @@ export class Drums extends THREE.Group {
     const HOVER = 0.1;
     for (const piece of this.pieces) {
       for (const p of pointers) {
-        if (!p.active) continue;
+        if (!p.active || (p.shoulder && piece.type !== 'cymbal')) continue;
         _tip.copy(p.tip);
         piece.group.worldToLocal(_tip);
         if (_tip.y < -0.005 || _tip.y > HOVER) continue;
@@ -267,6 +278,6 @@ export class Drums extends THREE.Group {
 
   playbackHit(kind, vel) {
     const piece = this.pieces.find((x) => x.kind === kind);
-    if (piece) this.hit(piece, vel);
+    if (piece) this.hit(piece, vel, null, true);
   }
 }

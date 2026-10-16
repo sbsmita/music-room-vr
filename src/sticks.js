@@ -34,8 +34,9 @@ export class Sticks {
     this.scene = scene;
     this.sticks = [];
     this.lastPinchPoint = new THREE.Vector3();
-    // Per-frame blend toward the tracked pose: shaves jitter off the tip with ~15 ms of lag.
-    this.smoothing = 0.65;
+    // Blend toward the tracked pose each frame (1 = snap). Snapping keeps the stick's motion in
+    // step with the hand's tracking samples, which is what the drums measure speed against.
+    this.smoothing = 1;
     const mat = new THREE.MeshStandardMaterial({ color: 0xd9b88a, roughness: 0.6 });
     const snare = drums.pieces.find((p) => p.kind === 'snare');
     for (let i = 0; i < 2; i++) {
@@ -66,10 +67,14 @@ export class Sticks {
       g.position.copy(restPos);
       g.quaternion.copy(restQuat);
       snare.group.remove(rest);
+      // Tip and shoulder belong to one owner, so a hit stamps its debounce window on both and a
+      // stroke that crosses a cymbal with both counts once. Their arm states stay separate.
+      const owner = { connected: true, kind: 'stick', pinching: false, pinchStart: false, pinchEnd: false, pointers: [] };
       const mk = (id) => {
-        const p = input.makePointer(id, { connected: true, kind: 'stick', pinching: false, pinchStart: false, pinchEnd: false, pointers: [] });
+        const p = input.makePointer(id, owner);
         p.external = true;
         p.stick = true;
+        owner.pointers.push(p);
         return p;
       };
       const pointer = mk('stick' + i);
@@ -187,17 +192,19 @@ export class Sticks {
     for (const s of this.sticks) {
       if (s.hand) {
         const h = s.hand;
-        if (!h.connected) {
-          // Tracking lost: freeze in place, silence the pointers, drop only after a grace period.
+        // Tracking lost, either the input source is gone or its joints are untracked: freeze in
+        // place, silence the pointers, snap (not blend) when tracking returns, and drop the
+        // stick only after a grace period.
+        const ok = h.connected && this.handGrip(h);
+        if (!ok) {
           s.lostFor += dt;
+          s.smoothed = false;
           s.pointer.down = s.shoulder.down = false;
           if (s.lostFor > LOST_GRACE) this.release(s);
           continue;
         }
         s.lostFor = 0;
-        const ok = this.handGrip(h);
-        s.pointer.down = s.shoulder.down = ok;
-        if (!ok) continue;
+        s.pointer.down = s.shoulder.down = true;
         // A little smoothing shaves tracking jitter off the tip without visible lag.
         if (s.smoothed && this.smoothing < 1) {
           s.axis.lerp(_axis, this.smoothing).normalize();
@@ -243,13 +250,19 @@ export class Sticks {
         continue;
       }
       const gap = this.pinchGap(h);
-      const open = gap === null ? !h.pinching : gap > OPEN_DISTANCE;
-      s.openFor = open ? s.openFor + dt : 0;
+      // Untracked joints say nothing about the grip: the tracking-loss grace handles that case.
+      if (gap === null) continue;
+      s.openFor = gap > OPEN_DISTANCE ? s.openFor + dt : 0;
       if (s.openFor > OPEN_DWELL) this.release(s);
     }
   }
 
   // Glow on the stick each fingertip would actually pick up: the nearest free one within reach.
+  // Drop every held stick at once (session end).
+  releaseAll() {
+    for (const s of this.sticks) if (s.hand) this.release(s);
+  }
+
   hover(pointers, glow) {
     if (!this.drums.visible) return;
     const best = new Map();

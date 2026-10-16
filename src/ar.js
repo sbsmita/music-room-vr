@@ -7,8 +7,8 @@ const _m = new THREE.Matrix4();
 
 // Mixed-reality mode: passthrough on, the 88-key piano placed on a real surface.
 // A reticle follows where the hand points across real surfaces (hit-test); a pinch drops the
-// piano there facing the player. On a table the keybed rests on the tabletop and the pedal
-// drops to the floor; on the floor the full upright appears.
+// piano there facing the player. On a table the keybed rests on the tabletop with the lower
+// cabinet hidden; on the floor the full upright appears.
 export class ARMode {
   constructor({ renderer, scene, camera, piano, input, onPlaced }) {
     this.renderer = renderer;

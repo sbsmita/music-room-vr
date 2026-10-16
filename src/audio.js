@@ -163,7 +163,6 @@ export class AudioEngine {
     };
     for (let lane = 0; lane < 3; lane++) next();
     setTimeout(() => {
-      for (let m = 40; m <= 72; m++) this.getBuffer('guitar', m);
       for (let m = 48; m <= 84; m++) this.getBuffer('harp', m);
     }, 1500);
   }
@@ -703,6 +702,7 @@ export class AudioEngine {
     }
   }
 
+  drumLevel = 1.7;
   drum(kind, vel = 0.8, t = this.now) {
     if (!this.started) return;
     vel = clamp(vel, 0.05, 1);
@@ -710,6 +710,8 @@ export class AudioEngine {
     // Route every voice of this hit to the drum's own spatial source, with a short room send.
     const src = this.spatial('drum:' + kind);
     const dest = this.ctx.createGain();
+    // The kit sits well above the other instruments, the way a live kit does in a room.
+    dest.gain.value = this.drumLevel;
     dest.connect(src);
     const room = this.ctx.createGain();
     room.gain.value = kind === 'kick' ? 0.35 : kind === 'crash' || kind === 'ride' ? 0.2 : 0.5;
