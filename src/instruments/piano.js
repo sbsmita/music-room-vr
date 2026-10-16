@@ -20,6 +20,10 @@ export class Piano extends THREE.Group {
     this.BW = 0.0137;
     this.BL = 0.095;
     this.BTOP = 0.012; // black key top above white top
+    // The note fires this far into the key's travel (of ~10 mm), so resting a finger on the
+    // surface does nothing and the key must visibly go down before it sounds.
+    this.TRIGGER = 0.008;
+    this.MIN_PRESS_SPEED = 0.08; // m/s downward at the trigger point
     this.keys = [];
     this.whites = [];
     this.blacks = [];
@@ -255,18 +259,27 @@ export class Piano extends THREE.Group {
       this.worldToLocal(_prev);
       const inBoard =
         _tip.x > this.x0 - 0.01 && _tip.x < -this.x0 + 0.01 && _tip.z > -this.L - 0.01 && _tip.z < 0.025 && _tip.y > -0.06 && _tip.y < 0.1;
-      const key = inBoard ? this.keyAt(_tip.x, _tip.z) : null;
-      if (held && held !== key) this.releaseKey(held, p);
+      let key = inBoard ? this.keyAt(_tip.x, _tip.z) : null;
+      let heldNow = held;
+      if (held && held !== key) {
+        this.releaseKey(held, p);
+        heldNow = null;
+      }
       if (!key) continue;
       const top = key.black ? this.BTOP : 0;
       if (!key.pressedBy.has(p.id)) {
-        const trigger = top - 0.004;
-        if (_prev.y > trigger && _tip.y <= trigger && _tip.y > top - 0.05) {
-          const vy = (_prev.y - _tip.y) / Math.max(dt, 1e-3);
-          const vel = clamp(Math.pow((vy - 0.03) / 1.3, 0.8), 0.12, 1);
-          this.pressKey(key, p, vel);
+        const held = heldNow;
+        const trigger = top - this.TRIGGER;
+        const vy = (_prev.y - _tip.y) / Math.max(dt, 1e-3);
+        if (_prev.y > trigger && _tip.y <= trigger && _tip.y > top - 0.06) {
+          // A deliberate press: crossing the trigger depth with some downward speed.
+          if (vy < this.MIN_PRESS_SPEED) continue;
+          this.pressKey(key, p, clamp(Math.pow((vy - 0.03) / 1.3, 0.8), 0.12, 1));
+        } else if (held === null && _tip.y <= trigger && _tip.y > top - 0.06 && p.speed > 0.15) {
+          // Glissando / fast run: the finger slid onto this key while already pressed down.
+          this.pressKey(key, p, clamp(Math.pow(p.speed / 2.0, 0.8), 0.2, 0.9));
         }
-      } else if (_tip.y > top + 0.012) {
+      } else if (_tip.y > top + 0.01) {
         this.releaseKey(key, p);
       }
     }

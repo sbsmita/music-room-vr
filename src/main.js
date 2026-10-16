@@ -438,6 +438,8 @@ function rigNear(point) {
 // same rig with both and twist for a full turn; the rig follows the midpoint.
 const grab = { rig: null, hand: null, hand2: null, offset: new THREE.Vector3(), yaw0: 0, handYaw0: 0, pairAngle0: 0, pairYaw0: 0 };
 const ROOM = { xMin: -2.8, xMax: 2.8, zMin: -0.8, zMax: 3.6 };
+// A grabbed instrument can also be lifted or lowered, within this range of its home height.
+const LIFT = { min: -0.45, max: 0.6, deadband: 0.03 };
 const _mid = new THREE.Vector3();
 function clampRoom(g) {
   if (ar.active) return;
@@ -448,7 +450,12 @@ function startGrab(rig, point, hand, handYaw = 0) {
   grab.rig = rig;
   grab.hand = hand;
   grab.hand2 = null;
-  grab.offset.set(rig.group.position.x - point.x, 0, rig.group.position.z - point.z);
+  grab.offset.set(rig.group.position.x - point.x, rig.group.position.y - point.y, rig.group.position.z - point.z);
+  grab.y0 = rig.group.position.y;
+  grab.pointY0 = point.y;
+  grab.lifting = false;
+  if (grab.homeY === undefined) grab.homeY = new Map();
+  if (!grab.homeY.has(rig)) grab.homeY.set(rig, rig.group.position.y);
   grab.yaw0 = rig.group.rotation.y;
   grab.handYaw0 = handYaw;
   rig.grabbed = true;
@@ -465,8 +472,18 @@ function moveGrab(point, handYaw = null) {
   }
   g.position.x = point.x + grab.offset.x;
   g.position.z = point.z + grab.offset.z;
+  applyLift(point.y);
   clampRoom(g);
   grabRing.position.set(g.position.x, 0.006, g.position.z);
+}
+// Vertical follow starts only once the hand has clearly moved up or down, so a level drag
+// stays level; then the rig tracks the hand's height within a sensible range of its home.
+function applyLift(pointY) {
+  const g = grab.rig.group;
+  if (!grab.lifting && Math.abs(pointY - grab.pointY0) > LIFT.deadband) grab.lifting = true;
+  if (!grab.lifting) return;
+  const home = grab.homeY.get(grab.rig);
+  g.position.y = Math.min(home + LIFT.max, Math.max(home + LIFT.min, grab.y0 + (pointY - grab.pointY0)));
 }
 function startTwoHand(pA, pB) {
   const g = grab.rig.group;
@@ -474,6 +491,9 @@ function startTwoHand(pA, pB) {
   grab.pairYaw0 = g.rotation.y;
   _mid.addVectors(pA, pB).multiplyScalar(0.5);
   grab.offset.set(g.position.x - _mid.x, 0, g.position.z - _mid.z);
+  grab.y0 = g.position.y;
+  grab.pointY0 = _mid.y;
+  grab.lifting = false;
 }
 function moveTwoHand(pA, pB) {
   const g = grab.rig.group;
@@ -484,11 +504,21 @@ function moveTwoHand(pA, pB) {
   _mid.addVectors(pA, pB).multiplyScalar(0.5);
   g.position.x = _mid.x + grab.offset.x;
   g.position.z = _mid.z + grab.offset.z;
+  applyLift(_mid.y);
   clampRoom(g);
   grabRing.position.set(g.position.x, 0.006, g.position.z);
 }
 function endGrab() {
   if (!grab.rig) return;
+  // Contact shadows ride inside the rig; keep them on the floor when the rig is lifted.
+  const g = grab.rig.group;
+  const home = grab.homeY ? grab.homeY.get(grab.rig) : g.position.y;
+  g.traverse((o) => {
+    if (o.material === mats.shadowBlob || (o.material && o.material.map === mats.shadowBlob.map && o.material.color && o.material.color.getHex() === 0)) {
+      if (o.userData.baseY === undefined) o.userData.baseY = o.position.y;
+      o.position.y = o.userData.baseY - (g.position.y - home);
+    }
+  });
   grab.rig.group.updateMatrixWorld(true);
   grab.rig.zone.setFromObject(grab.rig.group).expandByScalar(0.12);
   syncAudioPositions();
@@ -509,6 +539,7 @@ function syncAudioPositions() {
   harp.localToWorld(_sp.set(-0.33, 0.8, 0)); put('harp', _sp);
   guitar.localToWorld(_sp.set(0, 0, 0.06)); put('guitar', _sp);
   for (const piece of drums.pieces) {
+    if (piece.pad) continue;
     piece.group.getWorldPosition(_sp);
     put('drum:' + piece.kind, _sp);
   }
@@ -537,11 +568,18 @@ window.musicRoom.pianoHome = pianoHome;
 function updateGrab() {
   if (!renderer.xr.isPresenting) return;
   if (ar.active && (ar.placing || ar.placedThisFrame)) return;
+  // A grabbing hand that stops being tracked lets go of the rig.
+  if (grab.rig && grab.hand && grab.hand !== 'mouse' && grab.hand !== 'mouse-rotate' && !grab.hand.connected) endGrab();
+  if (grab.rig && grab.hand2 && !grab.hand2.connected) grab.hand2 = null;
   for (const h of input.hands) {
     if (!h.connected) continue;
     const p = h.pointers[0];
+    // Sticks come first, for any free hand, whether or not a rig is held by the other hand.
+    if (h.pinchStart && p.active && h !== grab.hand && h !== grab.hand2 && !h.holding) {
+      const took = sticks.tryGrab(h, p.tip);
+      if (took === 'grabbed' || took === 'near') continue;
+    }
     if (!grab.rig && h.pinchStart && p.active) {
-      if (sticks.tryGrab(h, p.tip)) continue;
       const rig = rigNear(p.tip);
       if (rig) startGrab(rig, p.tip, h, input.handYaw(h));
       else if (ar.active) {
@@ -565,6 +603,9 @@ function updateGrab() {
         grab.offset.set(grab.rig.group.position.x - a.tip.x, 0, grab.rig.group.position.z - a.tip.z);
         grab.yaw0 = grab.rig.group.rotation.y;
         grab.handYaw0 = input.handYaw(grab.hand);
+        grab.y0 = grab.rig.group.position.y;
+        grab.pointY0 = a.tip.y;
+        grab.lifting = false;
       }
       continue;
     }
@@ -624,11 +665,11 @@ renderer.setAnimationLoop((time, frame) => {
     inst.update(pts, dt);
     if (inst.hover) inst.hover(pts, hoverGlow);
   }
-  sticks.hover(handPointers, hoverGlow);
+  if (!(ar.active && ar.placing)) sticks.hover(handPointers, hoverGlow);
   hoverGlow.update(dt);
   ar.update(frame);
   updateGrab();
-  sticks.updateReleases();
+  sticks.updateReleases(dt);
   updateListener();
   recorder.update();
   decor.update(dt);

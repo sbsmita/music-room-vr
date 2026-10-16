@@ -114,6 +114,7 @@ export class Drums extends THREE.Group {
     g.add(top);
     this.add(g);
     top.userData.piece = this.registerPiece('kick', g, 0.1, 'drum');
+    top.userData.piece.pad = true;
     this.hitMeshes.push(top);
     this.stand(new THREE.Vector3(pos[0], pos[1] - 0.04, pos[2]));
   }
@@ -177,9 +178,17 @@ export class Drums extends THREE.Group {
     return piece;
   }
 
-  hit(piece, vel) {
+  hit(piece, vel, p = null) {
     const now = performance.now();
-    if (now - piece.lastHit < 45) return;
+    // A short per-piece window collapses same-stroke duplicates; a longer one per pointer stops
+    // one hand retriggering, while still letting the other hand or stick play a flam or a roll.
+    if (now - piece.lastHit < 12) return;
+    if (p) {
+      const key = 'hit:' + piece.kind;
+      const last = p.state.get(key) || -1;
+      if (now - last < 45) return;
+      p.state.set(key, now);
+    }
     piece.lastHit = now;
     this.audio.drum(piece.kind, vel);
     if (this.recorder) this.recorder.add({ type: 'drum', kind: piece.kind, vel });
@@ -195,16 +204,29 @@ export class Drums extends THREE.Group {
     for (const piece of this.pieces) {
       for (const p of pointers) {
         if (!p.active || !p.wasActive) continue;
+        // A stick's shoulder only strikes cymbals.
+        if (p.shoulder && piece.type !== 'cymbal') continue;
         _tip.copy(p.tip);
         piece.group.worldToLocal(_tip);
-        if (_tip.y > 0.03 || _tip.y < -0.08) continue;
         _prev.copy(p.prev);
         piece.group.worldToLocal(_prev);
-        if (!(_prev.y > 0 && _tip.y <= 0)) continue;
-        if (_tip.x * _tip.x + _tip.z * _tip.z > piece.r * piece.r) continue;
+        // Re-arm only once the pointer has risen clearly above the head, so jitter while parked
+        // just below the surface cannot retrigger.
+        const armKey = 'arm:' + piece.kind;
+        if (_tip.y > 0.02 || _prev.y > 0.02) p.state.set(armKey, true);
+        if (!(_prev.y > 0 && _tip.y <= 0) || _prev.y > 0.35) continue;
+        if (p.state.get(armKey) === false) continue;
+        // Test where the path crossed the head, not where it ended, so fast strokes count.
+        const t = _prev.y / (_prev.y - _tip.y);
+        const cx = _prev.x + (_tip.x - _prev.x) * t, cz = _prev.z + (_tip.z - _prev.z) * t;
+        if (cx * cx + cz * cz > piece.r * piece.r) continue;
         const vy = (_prev.y - _tip.y) / Math.max(dt, 1e-3);
-        if (vy < 0.2) continue;
-        this.hit(piece, clamp((vy - 0.2) / 2.4, 0.15, 1));
+        // Sticks move faster than fingertips and need headroom: taps soft, full strokes loud.
+        const v0 = p.stick ? 0.6 : 0.2;
+        if (vy < v0) continue;
+        const vel = p.stick ? clamp(Math.sqrt((vy - v0) / 6.4), 0.12, 1) : clamp((vy - v0) / 2.4, 0.15, 1);
+        p.state.set(armKey, false);
+        this.hit(piece, vel, p);
       }
       piece.flash = Math.max(0, piece.flash - dt * 6);
       if (piece.type === 'cymbal') {
