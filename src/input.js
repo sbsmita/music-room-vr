@@ -80,7 +80,7 @@ export class InputManager {
         p.tip.copy(p.next);
         p.active = true;
       } else {
-        if (!p.hand.connected) continue;
+        if (!p.hand.connected || p.hand.holding) continue;
         if (p.hand.kind === 'hand') {
           const j = p.hand.source.joints[p.joint];
           if (!j || j.visible === false) continue;
@@ -100,6 +100,14 @@ export class InputManager {
     }
   }
 
+  // Heading of a hand (wrist joint) or controller around the vertical axis, in radians.
+  handYaw(h) {
+    const src = h.kind === 'hand' ? h.source.joints && h.source.joints['wrist'] : h.source;
+    if (!src) return 0;
+    _dir.set(0, 0, -1).applyQuaternion(src.getWorldQuaternion(_q));
+    return Math.atan2(_dir.x, _dir.z);
+  }
+
   endFrame() {
     for (const h of this.hands) {
       h.pinchStart = false;
@@ -107,3 +115,5 @@ export class InputManager {
     }
   }
 }
+const _dir = new THREE.Vector3();
+const _q = new THREE.Quaternion();

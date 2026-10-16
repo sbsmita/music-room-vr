@@ -8,6 +8,7 @@ class Voice {
     this.src = null;
     this.gain = null;
     this.pendingRelease = null;
+    this.onRelease = null;
   }
   attach(src, gain) {
     this.src = src;
@@ -19,6 +20,11 @@ class Voice {
     if (!this.gain) {
       this.pendingRelease = t ?? c.currentTime;
       return;
+    }
+    if (this.onRelease) {
+      const cb = this.onRelease;
+      this.onRelease = null;
+      cb();
     }
     const tt = Math.max(t ?? c.currentTime, c.currentTime);
     const g = this.gain.gain;
@@ -55,18 +61,90 @@ export class AudioEngine {
     this.comp.ratio.value = 4;
     this.comp.attack.value = 0.003;
     this.comp.release.value = 0.18;
-    this.master.connect(this.comp).connect(c.destination);
+    this.master.connect(this.comp);
 
     this.reverb = c.createConvolver();
-    this.reverb.buffer = this.makeImpulse(1.7, 2.4);
+    this.reverb.buffer = this.makeRoomImpulse({ seconds: 2.0, preDelay: 0.014, fast: 0.32, slow: 0.62, lp: 0.11, early: 1 });
     this.reverbGain = c.createGain();
-    this.reverbGain.gain.value = 0.28;
+    this.reverbGain.gain.value = 0.26;
     this.reverb.connect(this.reverbGain).connect(this.master);
+    // Short, brighter room for the drums so they sit in the space without washing out.
+    this.drumRoom = c.createConvolver();
+    this.drumRoom.buffer = this.makeRoomImpulse({ seconds: 0.45, preDelay: 0.004, fast: 0.3, slow: 0.45, lp: 0.3, early: 0.8 });
+    this.drumRoomGain = c.createGain();
+    this.drumRoomGain.gain.value = 0.3;
+    this.drumRoom.connect(this.drumRoomGain).connect(this.spatial('drum:room'));
+    // Soundboard and soundbox resonances: a few decaying modes the strings excite.
+    this.pianoBoard = c.createConvolver();
+    this.pianoBoard.buffer = this.makeBodyImpulse([95, 142, 187, 236, 298, 372, 450, 560], 0.28);
+    this.pianoBoardGain = c.createGain();
+    this.pianoBoardGain.gain.value = 0.22;
+    this.pianoBoard.connect(this.pianoBoardGain).connect(this.spatial('piano-mid'));
+    this.harpBox = c.createConvolver();
+    this.harpBox.buffer = this.makeBodyImpulse([138, 205, 286, 377, 515, 690], 0.3);
+    this.harpBoxGain = c.createGain();
+    this.harpBoxGain.gain.value = 0.24;
+    this.harpBox.connect(this.harpBoxGain).connect(this.spatial('harp'));
+    // A touch of air on the master: head-related filtering softens the top end.
+    this.air = c.createBiquadFilter();
+    this.air.type = 'highshelf';
+    this.air.frequency.value = 7500;
+    this.air.gain.value = 1.5;
 
+    this.comp.connect(this.air).connect(c.destination);
     this.noise = this.makeNoise();
     this.started = true;
     await c.resume();
     this.precompute();
+  }
+
+  // Room impulse: silence for the pre-delay, a handful of early reflections, then a diffuse tail
+  // made of a fast-decaying full-band layer and a slower-decaying low-passed layer, so highs die
+  // first the way they do in a furnished room. Channels are decorrelated for width.
+  makeRoomImpulse({ seconds, preDelay, fast, slow, lp, early }) {
+    const c = this.ctx;
+    const sr = c.sampleRate;
+    const len = Math.floor(sr * seconds);
+    const buf = c.createBuffer(2, len, sr);
+    const taps = [0.009, 0.014, 0.019, 0.027, 0.034, 0.045, 0.058];
+    const gains = [0.7, 0.55, 0.45, 0.38, 0.3, 0.22, 0.15];
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      const pd = Math.floor(sr * preDelay);
+      let low = 0;
+      for (let i = pd; i < len; i++) {
+        const t = (i - pd) / sr;
+        const n = Math.random() * 2 - 1;
+        low += lp * (n - low);
+        const fadeIn = Math.min(1, t / 0.006);
+        d[i] = fadeIn * (0.55 * n * Math.exp(-t / (seconds * fast)) + 1.5 * low * Math.exp(-t / (seconds * slow)));
+      }
+      for (let k = 0; k < taps.length; k++) {
+        const at = pd + Math.floor(sr * (taps[k] + (ch ? 0.0011 * (k % 2 ? 1 : -1) : 0)));
+        for (let j = 0; j < 3 && at + j < len; j++) d[at + j] += early * gains[k] * (1 - j * 0.3) * (Math.random() < 0.5 ? -1 : 1);
+      }
+    }
+    return buf;
+  }
+
+  // Body impulse: decaying sines at the given mode frequencies, lightly randomised in phase.
+  makeBodyImpulse(modes, seconds) {
+    const c = this.ctx;
+    const sr = c.sampleRate;
+    const len = Math.floor(sr * seconds);
+    const buf = c.createBuffer(1, len, sr);
+    const d = buf.getChannelData(0);
+    const phases = modes.map(() => Math.random() * Math.PI * 2);
+    for (let i = 0; i < len; i++) {
+      const t = i / sr;
+      let v = 0;
+      for (let k = 0; k < modes.length; k++) v += Math.sin(2 * Math.PI * modes[k] * t + phases[k]) * Math.exp(-t / (seconds * (0.35 - k * 0.03))) / (1 + k * 0.5);
+      d[i] = v;
+    }
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(d[i]));
+    for (let i = 0; i < len; i++) d[i] /= peak * 6;
+    return buf;
   }
 
   // Render the piano's middle octaves on the audio thread so first presses are instant.
@@ -249,21 +327,28 @@ export class AudioEngine {
     return air;
   }
 
-  playBuffer(buf, { t, level, cutoff, send, voice, body = false, source = null }) {
+  playBuffer(buf, { t, level, cutoff, send, voice, body = false, source = null, resonator = null, resonance = 0 }) {
     const c = this.ctx;
     const src = c.createBufferSource();
     src.buffer = buf;
+    // No two notes identical: a few cents of pitch, a little tone and level, like a real touch.
+    src.playbackRate.value = 1 + (Math.random() - 0.5) * 0.0032;
     const f = c.createBiquadFilter();
     f.type = 'lowpass';
-    f.frequency.value = cutoff;
+    f.frequency.value = cutoff * (1 + (Math.random() - 0.5) * 0.1);
     f.Q.value = 0.4;
     const g = c.createGain();
-    g.gain.value = level;
+    g.gain.value = level * (1 + (Math.random() - 0.5) * 0.12);
     src.connect(f).connect(g).connect(body ? this.guitarBody() : source ? this.spatial(source) : this.master);
     if (send > 0) {
       const s = c.createGain();
       s.gain.value = send;
       g.connect(s).connect(this.reverb);
+    }
+    if (resonator && resonance > 0) {
+      const b = c.createGain();
+      b.gain.value = resonance;
+      g.connect(b).connect(resonator);
     }
     src.start(Math.max(t, c.currentTime));
     voice.attach(src, g);
@@ -477,10 +562,23 @@ export class AudioEngine {
       // Bass, middle and treble each have their own source across the keyboard's width.
       source: midi < 52 ? 'piano-lo' : midi < 76 ? 'piano-mid' : 'piano-hi',
     };
+    opts.resonator = this.pianoBoard;
+    opts.resonance = 0.6 + 0.4 * vel;
+    // Hammer knock: the felt hitting the string, louder and harder with velocity.
+    this.noiseVoice(t, { bp: clamp(f * 1.6 + 900, 600, 3200), q: 1.1, peak: 0.05 + 0.3 * vel * vel, decay: 0.007 + 0.004 * vel, dest: this.spatial(opts.source) });
+    voice.onRelease = () => this.noiseVoice(this.now, { bp: 260, q: 0.8, peak: 0.028, decay: 0.03, dest: this.spatial(opts.source) });
     const b = this.getBuffer('piano', midi);
     if (b instanceof Promise) b.then((buf) => this.playBuffer(buf, { ...opts, t: this.now }));
     else this.playBuffer(b, opts);
     return voice;
+  }
+
+  // Sustain pedal going down or up: a soft mechanical thump under the piano.
+  pedalNoise(down) {
+    if (!this.started) return;
+    const t = this.now;
+    this.toneVoice(t, { f0: down ? 70 : 90, f1: 45, slide: 0.03, peak: down ? 0.12 : 0.07, decay: 0.07, dest: this.spatial('piano-mid') });
+    this.noiseVoice(t, { lp: 900, peak: 0.03, decay: 0.03, dest: this.spatial('piano-mid') });
   }
 
   pluck(kind, midi, vel = 0.7, t = this.now) {
@@ -488,6 +586,9 @@ export class AudioEngine {
     vel = clamp(vel, 0.05, 1);
     const voice = new Voice(this);
     const guitar = kind === 'guitar';
+    // Contact transient: pick click on the guitar, fingertip thud on the harp.
+    if (guitar) this.noiseVoice(t, { bp: 3200, q: 2, peak: 0.04 + 0.1 * vel, decay: 0.005, dest: this.spatial('guitar') });
+    else this.noiseVoice(t, { lp: 700, peak: 0.02 + 0.05 * vel, decay: 0.012, dest: this.spatial('harp') });
     return this.playBuffer(this.getBuffer(kind, midi), {
       t,
       level: (guitar ? 0.12 : 0.1) + 0.6 * vel,
@@ -496,6 +597,8 @@ export class AudioEngine {
       voice,
       body: guitar,
       source: guitar ? null : 'harp',
+      resonator: guitar ? null : this.harpBox,
+      resonance: guitar ? 0 : 0.5 + 0.4 * vel,
     });
   }
 
@@ -604,18 +707,27 @@ export class AudioEngine {
     if (!this.started) return;
     vel = clamp(vel, 0.05, 1);
     const v2 = vel * vel;
-    // Route every voice of this hit to the drum's own spatial source.
-    const dest = this.spatial('drum:' + kind);
+    // Route every voice of this hit to the drum's own spatial source, with a short room send.
+    const src = this.spatial('drum:' + kind);
+    const dest = this.ctx.createGain();
+    dest.connect(src);
+    const room = this.ctx.createGain();
+    room.gain.value = kind === 'kick' ? 0.35 : kind === 'crash' || kind === 'ride' ? 0.2 : 0.5;
+    dest.connect(room).connect(this.drumRoom);
     const tv = this.toneVoice, nv = this.noiseVoice, mv = this.metalVoice;
     this.toneVoice = (tt, o) => tv.call(this, tt, { ...o, dest });
     this.noiseVoice = (tt, o) => nv.call(this, tt, { ...o, dest });
-    this.metalVoice = (tt, o) => mv.call(this, tt, { ...o, dest });
+    this.metalVoice = (tt, o) => mv.call(this, tt, { ...o, dest, bp: (o.bp || 9500) * (0.85 + 0.3 * vel) });
     try {
       this.drumVoices(kind, vel, v2, t);
     } finally {
       this.toneVoice = tv;
       this.noiseVoice = nv;
       this.metalVoice = mv;
+    }
+    // Snare wires rattle in sympathy when the kick and toms hit.
+    if (kind === 'kick' || kind.startsWith('tom') || kind === 'floor') {
+      this.noiseVoice(t + 0.004, { hp: 2800, lp: 9000, peak: 0.07 * vel, decay: 0.08, dest: this.spatial('drum:snare') });
     }
   }
 

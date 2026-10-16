@@ -122,6 +122,27 @@ export class Piano extends THREE.Group {
     this.add(this.pedalRig);
     this.pedals = [pedal];
     this.sustainPedal = pedal;
+    // Hand-operated sustain lever on the right cheek block: tap from above while playing.
+    this.lever = new THREE.Group();
+    this.lever.position.set(0.67, 0.05, -0.08);
+    this.lever.add(box(0.03, 0.012, 0.05, mats.brass, 0, 0.006, 0));
+    const arm = new THREE.Group();
+    arm.position.set(0, 0.012, 0);
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.005, 0.045, 10), mats.brass);
+    stick.position.y = 0.0225;
+    arm.add(stick);
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.009, 12, 10), mats.ebony);
+    knob.position.y = 0.047;
+    arm.add(knob);
+    arm.rotation.x = 0.45;
+    this.lever.add(arm);
+    this.leverArm = arm;
+    this.add(this.lever);
+    const leverHit = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.07, 10), new THREE.MeshBasicMaterial({ visible: false }));
+    leverHit.position.set(0.67, 0.085, -0.08);
+    leverHit.userData.pedal = 'sustain';
+    this.add(leverHit);
+    this.hitMeshes.push(leverHit);
     this.hitMeshes.push(this.sustainPedal);
     this.sustain = false;
     this.sustained = new Set();
@@ -186,6 +207,8 @@ export class Piano extends THREE.Group {
     if (this.sustain === on) return;
     this.sustain = on;
     this.sustainPedal.rotation.x = on ? 0.32 : 0.18;
+    if (this.leverArm) this.leverArm.rotation.x = on ? -0.45 : 0.45;
+    if (this.audio.pedalNoise) this.audio.pedalNoise(on);
     if (!on) {
       for (const key of this.sustained) {
         if (!key.pressedBy.size && key.voice) {
@@ -252,11 +275,13 @@ export class Piano extends THREE.Group {
       if (!p.active || !p.wasActive) continue;
       _tip.copy(p.tip);
       this.worldToLocal(_tip);
-      const top = this.pedalRig.position.y + 0.055;
-      if (Math.abs(_tip.x) > 0.035 || _tip.z < -0.19 || _tip.z > -0.07) continue;
       _prev.copy(p.prev);
       this.worldToLocal(_prev);
-      if (_prev.y > top && _tip.y <= top && _tip.y > top - 0.04) this.togglePedal();
+      const top = this.pedalRig.position.y + 0.055;
+      if (Math.abs(_tip.x) <= 0.035 && _tip.z >= -0.19 && _tip.z <= -0.07 && _prev.y > top && _tip.y <= top && _tip.y > top - 0.04) this.togglePedal();
+      // Lever on the right cheek: fingertip coming down onto the knob.
+      const lt = 0.1;
+      if (Math.abs(_tip.x - 0.67) <= 0.035 && Math.abs(_tip.z + 0.08) <= 0.04 && _prev.y > lt && _tip.y <= lt && _tip.y > lt - 0.05) this.togglePedal();
     }
     let wDirty = false, bDirty = false;
     for (const k of this.keys) {
@@ -292,6 +317,16 @@ export class Piano extends THREE.Group {
       const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(this.getWorldQuaternion(_q));
       const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(_q);
       glow.add({ pos, length: 0.07, width: key.black ? 0.016 : 0.024, axis, normal, strength: 1 - Math.max(0, h) / HOVER });
+    }
+    for (const p of pointers) {
+      if (!p.active) continue;
+      _tip.copy(p.tip);
+      this.worldToLocal(_tip);
+      const h = _tip.y - 0.1;
+      if (Math.abs(_tip.x - 0.67) > 0.04 || Math.abs(_tip.z + 0.08) > 0.045 || h < -0.03 || h > 0.07) continue;
+      const pos = new THREE.Vector3(0.67, 0.1, -0.08);
+      this.localToWorld(pos);
+      glow.add({ pos, length: 0.05, width: 0.05, axis: null, normal: new THREE.Vector3(0, 1, 0).applyQuaternion(this.getWorldQuaternion(_q)), strength: 1 - Math.max(0, h) / 0.07 });
     }
   }
 

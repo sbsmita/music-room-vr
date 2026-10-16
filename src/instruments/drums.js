@@ -24,6 +24,7 @@ export class Drums extends THREE.Group {
     this.addDrum('tom2', 0.165, 0.22, [0.43, 0.9, -0.66], 0.4, mats.shell);
     this.addDrum('floor', 0.2, 0.36, [0.55, 0.64, -0.26], 0.05, mats.shell);
     this.addKick(0.28, 0.4, [0.26, 0.29, -0.52]);
+    this.addKickPad([-0.22, 0.6, -0.26]);
     this.addCymbal('hat', 0.17, [-0.35, 0.92, -0.5], 0.12, true);
     this.addCymbal('crash', 0.21, [-0.3, 1.32, -0.95], 0.35);
     this.addCymbal('ride', 0.26, [0.72, 1.18, -0.86], 0.3);
@@ -92,6 +93,29 @@ export class Drums extends THREE.Group {
     top.userData.piece = this.registerPiece(kind, g, r, 'drum');
     this.hitMeshes.push(top);
     this.stand(new THREE.Vector3(pos[0], pos[1] - depth * 0.6, pos[2]));
+  }
+
+  // Hands can't reach a foot pedal, so the kick also lives on a pad at hand height beside the snare.
+  addKickPad(pos) {
+    const m = this.mats;
+    const g = new THREE.Group();
+    g.position.set(pos[0], pos[1], pos[2]);
+    g.rotation.x = 0.25;
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 32), m.rubber);
+    pad.position.y = -0.015;
+    pad.castShadow = true;
+    g.add(pad);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.008, 8, 40), m.chrome);
+    rim.rotation.x = Math.PI / 2;
+    g.add(rim);
+    const top = new THREE.Mesh(new THREE.CircleGeometry(0.095, 32), m.rubber);
+    top.rotation.x = -Math.PI / 2;
+    top.position.y = 0.001;
+    g.add(top);
+    this.add(g);
+    top.userData.piece = this.registerPiece('kick', g, 0.1, 'drum');
+    this.hitMeshes.push(top);
+    this.stand(new THREE.Vector3(pos[0], pos[1] - 0.04, pos[2]));
   }
 
   addKick(r, depth, pos) {
