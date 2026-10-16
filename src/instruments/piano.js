@@ -26,8 +26,8 @@ export class Piano extends THREE.Group {
     this.MIN_PRESS_SPEED = 0.08; // m/s downward at the trigger point
     // A finger already a few mm into the key and moving fast enough to reach the trigger depth
     // before the next tracking sample fires the note now instead of one sample late.
-    this.FAST_PRESS_SPEED = 0.25;
-    this.EARLY_DEPTH = 0.003;
+    this.FAST_PRESS_SPEED = 0.5;
+    this.EARLY_DEPTH = 0.005;
     // The key lets go once the finger has risen 5 mm off its deepest point and to within this
     // distance of the surface, so a repeated note needs only a short lift, like a real action.
     this.RELEASE_LIFT = 0.003;
@@ -155,6 +155,12 @@ export class Piano extends THREE.Group {
     return this.whites[i];
   }
 
+  // Is a local point still within this key's footprint, widened by a margin?
+  withinKey(key, lx, lz, margin) {
+    if (key.black) return Math.abs(lx - key.x) < this.BW / 2 + 0.0015 + margin && lz < -(this.L - this.BL) + margin;
+    return Math.abs(lx - key.x) < this.W / 2 + margin;
+  }
+
   pressKey(key, p, vel) {
     const now = performance.now() / 1000;
     // A new phrase: the automatic pedal lifts, then goes back down under this note.
@@ -235,6 +241,12 @@ export class Piano extends THREE.Group {
       const inBoard =
         _tip.x > this.x0 - 0.01 && _tip.x < -this.x0 + 0.01 && _tip.z > -this.L - 0.01 && _tip.z < 0.025 && _tip.y > -0.06 && _tip.y < 0.1;
       let key = inBoard ? this.keyAt(_tip.x, _tip.z) : null;
+      // A finger keeps the key it holds until it has clearly moved onto a neighbour, so two
+      // fingers on adjacent keys don't flicker across the boundary between them.
+      if (held && key && key !== held && this.withinKey(held, _tip.x, _tip.z, 0.004)) key = held;
+      // Only a finger that was already down on a key is sliding; one arriving at depth from
+      // nowhere has not pressed anything.
+      const slid = !!held && held !== key && inBoard;
       let heldNow = held;
       if (held && held !== key) {
         this.releaseKey(held, p);
@@ -257,7 +269,7 @@ export class Piano extends THREE.Group {
           // tracking sample: sound now rather than a sample late.
           this.pressKey(key, p, this.strikeVelocity(vy));
           key.bottom = _tip.y;
-        } else if (held === null && _tip.y <= trigger && _tip.y > top - 0.06 && p.speed > 0.15) {
+        } else if (slid && held === null && _tip.y <= trigger && _tip.y > top - 0.06 && p.speed > 0.15) {
           // Glissando / fast run: the finger slid onto this key while already pressed down.
           this.pressKey(key, p, clamp(Math.pow(p.speed / 2.0, 0.8), 0.2, 0.9));
           key.bottom = _tip.y;

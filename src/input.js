@@ -39,7 +39,7 @@ export class InputManager {
   }
 
   makeHand(index, source, kind) {
-    const h = { index, source, kind, connected: false, pinching: false, pinchStart: false, pinchEnd: false, pointers: [], pinchFor: 0, lastPlay: -Infinity };
+    const h = { index, source, kind, connected: false, pinching: false, pinchStart: false, pinchEnd: false, pointers: [], pinchFor: 0, lastPlay: -Infinity, grasping: false, graspStart: false, graspEnd: false };
     this.hands.push(h);
     return h;
   }
@@ -74,7 +74,10 @@ export class InputManager {
 
   update(dt) {
     const now = performance.now() / 1000;
-    for (const h of this.hands) h.pinchFor = h.pinching ? h.pinchFor + dt : 0;
+    for (const h of this.hands) {
+      h.pinchFor = h.pinching ? h.pinchFor + dt : 0;
+      if (h.kind === 'hand' && h.connected) this.updateGrasp(h);
+    }
     for (const p of this.pointers) {
       p.wasActive = p.active;
       p.prev.copy(p.tip);
@@ -136,6 +139,35 @@ export class InputManager {
     for (const p of this.pointers) p.active = false;
   }
 
+  // How closed the hand is: mean distance from the middle, ring and little fingertips to the
+  // wrist. About 0.18 m for an open hand, under 0.1 m for a fist. null if untracked.
+  graspAmount(h) {
+    if (h.kind !== 'hand' || !h.source.joints) return null;
+    const j = h.source.joints;
+    const w = j['wrist'];
+    if (!w || w.visible === false) return null;
+    w.getWorldPosition(_ga);
+    let sum = 0, n = 0;
+    for (const name of ['middle-finger-tip', 'ring-finger-tip', 'pinky-finger-tip']) {
+      const t = j[name];
+      if (!t || t.visible === false) continue;
+      sum += t.getWorldPosition(_gb).distanceTo(_ga);
+      n++;
+    }
+    return n ? sum / n : null;
+  }
+
+  // A closing fist counts as a grasp (with hysteresis), the way a pinch does: so a stick can be
+  // picked up by closing the hand around it, not only by pinching it.
+  updateGrasp(h) {
+    const g = this.graspAmount(h);
+    if (g === null) return;
+    const on = h.grasping ? g < GRASP_OPEN : g < GRASP_CLOSE;
+    if (on && !h.grasping) h.graspStart = true;
+    if (!on && h.grasping) h.graspEnd = true;
+    h.grasping = on;
+  }
+
   // Heading of a hand (wrist joint) or controller around the vertical axis, in radians.
   handYaw(h) {
     const src = h.kind === 'hand' ? h.source.joints && h.source.joints['wrist'] : h.source;
@@ -148,8 +180,14 @@ export class InputManager {
     for (const h of this.hands) {
       h.pinchStart = false;
       h.pinchEnd = false;
+      h.graspStart = false;
+      h.graspEnd = false;
     }
   }
 }
+const GRASP_CLOSE = 0.105;
+const GRASP_OPEN = 0.13;
+const _ga = new THREE.Vector3();
+const _gb = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _q = new THREE.Quaternion();

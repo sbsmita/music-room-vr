@@ -192,15 +192,15 @@ const ar = new ARMode({
     arrangeAroundPiano();
     activeRigs = [pianoRig, ...rigs];
     syncAudioPositions();
-    hint.textContent = 'Pinch the side or top of the piano, or any other instrument, to drag it; turn your wrist or twist with both hands to rotate. Pinch empty air to place the piano again.';
+    hint.textContent = 'Pinch the side or top of the piano, or any other instrument, to drag it; turn your wrist or twist with both hands to rotate. Pinch and hold with both hands in empty air to bring everything to you. Pinch empty air with one hand to place the piano again.';
   },
 });
 function enterAR(session) {
   startAudio();
   room.group.visible = false;
+  decor.setCandles(false);
   for (const r of rigs) r.group.visible = false;
   activeRigs = [pianoRig];
-  for (const r of rigs) r.group.visible = false;
   scene.background = null;
   rig.position.set(0, 0, 0);
   rig.rotation.set(0, 0, 0);
@@ -211,6 +211,7 @@ function enterAR(session) {
   hint.textContent = 'Point at a table or the floor and pinch to place the piano. Pinch its side or top to drag; pinch empty air to place again.';
   session.addEventListener('end', () => {
     room.group.visible = true;
+    decor.setCandles(true);
     for (const h of rigHomes) {
       h.rig.group.visible = true;
       h.rig.group.position.copy(h.position);
@@ -249,7 +250,7 @@ renderer.xr.addEventListener('sessionend', () => {
 });
 renderer.xr.addEventListener('sessionstart', () => {
   startAudio();
-  if (!ar.active) hint.textContent = 'Pinch empty air and pull sideways to swivel your seat.';
+  if (!ar.active) hint.textContent = 'Pinch empty air and pull sideways to swivel your seat. Pinch and hold with both hands in empty air to bring everything to you.';
 });
 
 // ---- desktop mouse: becomes a pointer that lives on the surface it clicked ----
@@ -553,8 +554,9 @@ function updateGrab() {
   for (const h of input.hands) {
     if (!h.connected) continue;
     const p = h.pointers[0];
-    // Sticks come first, for any free hand, whether or not a rig is held by the other hand.
-    if (h.pinchStart && p.active && h !== grab.hand && h !== grab.hand2 && !h.holding) {
+    // Sticks come first, for any free hand, whether or not a rig is held by the other hand: a
+    // pinch or a closing fist near a stick picks it up (a fist only once the hand stopped playing).
+    if ((h.pinchStart || (h.graspStart && !isPlaying(h))) && p.active && h !== grab.hand && h !== grab.hand2 && !h.holding) {
       const took = sticks.tryGrab(h, p.tip);
       if (took === 'grabbed' || took === 'near') {
         h.grabArmed = false;
@@ -604,6 +606,71 @@ function snapTurn(rad) {
   input.resetMotion();
 }
 const _tipPt = new THREE.Vector3();
+// ---- bring everything to me: both hands pinched in empty air and held ----
+// Lays the piano and every rig out around the player's current position and heading, in the
+// same arrangement as around the bench in the VR room, so nothing is ever out of reach.
+const SEAT = new THREE.Vector3(0, 0, 0.36);
+const SUMMON_HOLD = 0.8;
+const summon = { t: 0, done: false };
+const _fwd2 = new THREE.Vector3();
+function arrangeAroundPlayer(movePiano = true) {
+  camera.getWorldPosition(_head);
+  camera.getWorldDirection(_fwd2);
+  const yaw = Math.atan2(-_fwd2.x, -_fwd2.z);
+  const c = Math.cos(yaw), sn = Math.sin(yaw);
+  const place = (group, home, rot) => {
+    const dx = home.x - SEAT.x, dz = home.z - SEAT.z;
+    group.position.set(_head.x + dx * c + dz * sn, home.y, _head.z - dx * sn + dz * c);
+    group.rotation.set(rot.x, rot.y + yaw, rot.z);
+    group.updateMatrixWorld(true);
+  };
+  if (movePiano) {
+    const y = piano.position.y;
+    place(piano, pianoHome.position, pianoHome.rotation);
+    piano.position.y = y;
+    piano.updateMatrixWorld(true);
+    pianoZone.setFromObject(piano).expandByScalar(0.12);
+    if (ar.active && ar.catcher.visible) {
+      ar.catcher.position.set(piano.position.x, ar.catcher.position.y, piano.position.z);
+      ar.catcher.rotation.set(-Math.PI / 2, 0, 0);
+      ar.catcher.rotateZ(piano.rotation.y);
+      ar.sun.target.position.copy(piano.position);
+    }
+  }
+  for (const h of rigHomes) {
+    place(h.rig.group, h.position, h.rotation);
+    h.rig.group.visible = true;
+    h.rig.zone.setFromObject(h.rig.group).expandByScalar(0.12);
+  }
+  if (grab.homeY) grab.homeY.clear();
+  if (ar.active) activeRigs = [pianoRig, ...rigs];
+  syncAudioPositions();
+}
+function updateSummon(dt) {
+  if (!renderer.xr.isPresenting || grab.rig || (ar.active && (ar.placing || !piano.visible))) {
+    summon.t = 0;
+    return;
+  }
+  let both = 0;
+  for (const h of input.hands) {
+    if (!h.connected || !h.pinching || h.holding || isPlaying(h)) continue;
+    if (!input.indexTip(h, _tipPt) || nearInstrument(_tipPt)) continue;
+    both++;
+  }
+  if (both < 2) {
+    summon.t = 0;
+    summon.done = false;
+    return;
+  }
+  summon.t += dt;
+  if (summon.t >= SUMMON_HOLD && !summon.done) {
+    summon.done = true;
+    swivel.hand = null;
+    arrangeAroundPlayer(true);
+    input.resetMotion();
+  }
+}
+window.musicRoom.arrangeAroundPlayer = arrangeAroundPlayer;
 function updateSwivel() {
   if (!renderer.xr.isPresenting || ar.active) return;
   for (const h of input.hands) {
@@ -657,6 +724,7 @@ renderer.setAnimationLoop((time, frame) => {
   recorder.update();
   decor.update(dt);
   updateSwivel();
+  updateSummon(dt);
   input.endFrame();
   if (!renderer.xr.isPresenting) look.update();
   renderer.render(scene, camera);

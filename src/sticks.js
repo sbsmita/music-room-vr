@@ -15,9 +15,9 @@ const STICK_LEN = 0.4;
 const GRIP_FROM_BUTT = 0.13;
 const SHOULDER_FROM_BUTT = STICK_LEN - 0.08;
 const TILT = -0.22; // droop of the stick below the hand's forward line, radians (about 12 degrees)
-const GRAB_RADIUS = 0.07; // from the pinch point to the nearest point on the shaft
-const HOVER_RADIUS = 0.12;
-const DEAD_ZONE = 0.18; // a pinch this close to a stick that misses does nothing, rather than grabbing the kit
+const GRAB_RADIUS = 0.12; // from the pinch point to the nearest point on the shaft
+const HOVER_RADIUS = 0.14;
+const DEAD_ZONE = 0.24; // a pinch this close to a stick that misses does nothing, rather than grabbing the kit
 const OPEN_DISTANCE = 0.05; // thumb tip to index tip: beyond this the hand is open
 const OPEN_DWELL = 0.25; // seconds the hand must stay open before a stick is released
 const LOST_GRACE = 1.5; // seconds of tracking loss before a held stick is dropped
@@ -252,7 +252,8 @@ export class Sticks {
       const gap = this.pinchGap(h);
       // Untracked joints say nothing about the grip: the tracking-loss grace handles that case.
       if (gap === null) continue;
-      s.openFor = gap > OPEN_DISTANCE ? s.openFor + dt : 0;
+      // Open means the pinch has parted and the fist has opened; either grip keeps the stick.
+      s.openFor = gap > OPEN_DISTANCE && !h.grasping ? s.openFor + dt : 0;
       if (s.openFor > OPEN_DWELL) this.release(s);
     }
   }

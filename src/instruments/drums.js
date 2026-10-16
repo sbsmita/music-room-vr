@@ -22,14 +22,14 @@ export class Drums extends THREE.Group {
     // Everything within a seated reach of the throne, which sits about 0.2 m toward +z from the
     // kit's origin: cymbals low and pulled in, toms close over the snare.
     this.addDrum('snare', 0.18, 0.14, [0, 0.72, -0.3], 0.1, mats.pearl);
-    this.addDrum('tom1', 0.15, 0.2, [-0.04, 0.86, -0.5], 0.45, mats.shell);
-    this.addDrum('tom2', 0.165, 0.22, [0.27, 0.85, -0.48], 0.45, mats.shell);
-    this.addDrum('floor', 0.2, 0.36, [0.42, 0.62, -0.1], 0.05, mats.shell);
-    this.addKick(0.28, 0.4, [0.14, 0.29, -0.72]);
+    this.addDrum('tom1', 0.15, 0.2, [-0.07, 0.86, -0.52], 0.45, mats.shell);
+    this.addDrum('tom2', 0.165, 0.22, [0.29, 0.85, -0.46], 0.45, mats.shell);
+    this.addDrum('floor', 0.2, 0.36, [0.42, 0.62, -0.08], 0.05, mats.shell);
+    this.addKick(0.28, 0.4, [0.12, 0.29, -0.74]);
     this.addKickPad([-0.27, 0.6, -0.2]);
-    this.addCymbal('hat', 0.17, [-0.4, 0.78, -0.24], 0.12, true);
-    this.addCymbal('crash', 0.21, [-0.36, 0.98, -0.44], 0.35);
-    this.addCymbal('ride', 0.26, [0.44, 0.95, -0.34], 0.3);
+    this.addCymbal('hat', 0.17, [-0.48, 0.8, -0.34], 0.12, true);
+    this.addCymbal('crash', 0.21, [-0.38, 1.0, -0.52], 0.35);
+    this.addCymbal('ride', 0.22, [0.5, 0.98, -0.3], 0.3);
   }
 
   // Pole plus tripod legs, merged into a single chrome mesh.

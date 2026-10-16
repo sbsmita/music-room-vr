@@ -18,6 +18,8 @@ export class Decor {
     this.embers = [];
     this.time = 0;
     this.candleSpecs = [];
+    this.candleMeshes = [];
+    this.candleLights = [];
   }
 
   // ---- plants ----
@@ -198,7 +200,10 @@ export class Decor {
   // A candle with a live flame. Bodies and flames of every candle are merged in finalize().
   candle(parent, x, y, z, { r = 0.022, h = 0.12, light = false } = {}) {
     this.candleSpecs.push({ parent, pos: new V(x, y, z), r, h, seed: Math.random() * 20 });
-    if (light) this.flickerLight(0xffc070, 0.45, 1.8, 1.8, parent, new V(x, y + h + 0.08, z), 0.3);
+    if (light) {
+      this.flickerLight(0xffc070, 0.45, 1.8, 1.8, parent, new V(x, y + h + 0.08, z), 0.3);
+      this.candleLights.push(this.lights[this.lights.length - 1].light);
+    }
   }
 
   // Merge meshes that share a material into one, baking each mesh's local transform.
@@ -242,7 +247,14 @@ export class Decor {
     const flameMesh = new THREE.Mesh(mergeGeometries(flames), clusterFlameMaterial(1.8));
     flameMesh.frustumCulled = false;
     scene.add(holderMesh, waxMesh, wickMesh, flameMesh);
+    this.candleMeshes.push(holderMesh, waxMesh, wickMesh, flameMesh);
     this.candleSpecs = [];
+  }
+
+  // Candles belong to the room: in the player's real room they are hidden, lights included.
+  setCandles(on) {
+    for (const m of this.candleMeshes) m.visible = on;
+    for (const l of this.candleLights) l.visible = on;
   }
 
   sofa(x, z, yaw, width = 1.7, fabric = null, cushion = null) {
